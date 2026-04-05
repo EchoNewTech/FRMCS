@@ -1,65 +1,259 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useState } from "react";
+import { toast } from "react-hot-toast";
+
+
+export default function Page() {
+  const [expressConnected, setExpressConnected] = useState(false);
+  const [cargoConnected, setCargoConnected] = useState(false);
+  const [expressSpeed, setExpressSpeed] = useState(0);
+  const [cargoSpeed, setCargoSpeed] = useState(0);
+  const [status, setStatus] = useState<any>(null);
+
+  const API = "http://localhost:8000";
+
+
+  // EXPRESS
+
+  const connectExpress = async () => {
+    const id = toast.loading("Connecting Express...");
+
+    try {
+      const res = await fetch(`${API}/express/connect`, { method: "POST" });
+      
+      const data = await res.json();
+
+      toast.dismiss(id);
+
+      if (data.status === "error") {
+        toast.error(data.message);
+      } else {
+        setExpressConnected(true);
+        toast.success("Express connected");
+      }
+    } catch (err) {
+      toast.dismiss(id);
+      toast.error("Error connecting express");
+    }
+  };
+
+  const setExpress = async () => {
+    try {
+      const res = await fetch(`${API}/express/speed?speed=${expressSpeed}`, { method: "POST" });
+
+      const data = await res.json();
+
+      if (data.status === "error") {
+        toast.error(data.message);
+      } else {
+        toast.success("Express speed updated");
+      }
+    } catch {
+      toast.error("Error setting express speed");
+    }
+  };
+
+  const stopExpress = async () => {
+    try {
+      const res = await fetch(`${API}/express/stop`, { method: "POST" });
+
+      const data = await res.json();
+
+      if (data.status === "error") {
+        toast.error(data.message);
+      } else {
+        toast.success("Express stopped");
+      }
+    } catch {
+      toast.error("Error stopping express");
+    }
+  };
+
+  const disconnectExpress = async () => {
+    const id = toast.loading("Disconnecting...");
+
+    try {
+      const res = await fetch(`${API}/express/disconnect`, { method: "POST" });
+      
+      const data = await res.json();
+
+      toast.dismiss(id);
+
+      if (data.status === "error") {
+        toast.error(data.message);
+      } else {
+        setExpressConnected(false);
+        toast.success("Express disconnected");
+      }
+    } catch {
+      toast.dismiss(id);
+      toast.error("Error disconnecting express");
+    }
+  };
+
+
+  // CARGO
+
+  const connectCargo = async () => {
+    const id = toast.loading("Connecting Cargo...");
+
+    try {
+      const res = await fetch(`${API}/cargo/connect`, { method: "POST" });
+      const data = await res.json();
+
+      toast.dismiss(id);
+
+      if (data.status === "error") {
+        toast.error(data.message);
+      } else {
+        setCargoConnected(true);
+        toast.success("Cargo connected");
+      }
+    } catch (err) {
+      toast.dismiss(id);
+      toast.error("Error connecting cargo");
+    }
+  };
+
+  const setCargo = async () => {
+    try {
+      const res = await fetch(`${API}/cargo/speed?speed=${cargoSpeed}`, { method: "POST" });
+
+      const data = await res.json();
+
+      if (data.status === "error") {
+        toast.error(data.message);
+      } else {
+        toast.success("Cargo speed updated");
+      }
+    } catch {
+      toast.error("Error setting cargo speed");
+    }
+  };
+
+  const stopCargo = async () => {
+    try {
+      const res = await fetch(`${API}/cargo/stop`, { method: "POST" });
+
+      const data = await res.json();
+
+      if (data.status === "error") {
+        toast.error(data.message);
+      } else {
+        toast.success("Cargo stopped");
+      }
+    } catch {
+      toast.error("Error stopping cargo");
+    }
+  };
+
+  const disconnectCargo = async () => {
+    const id = toast.loading("Disconnecting...");
+
+    try {
+      const res = await fetch(`${API}/cargo/disconnect`, { method: "POST" });
+
+      const data = await res.json();
+
+      toast.dismiss(id);
+
+      if (data.status === "error") {
+        toast.error(data.message);
+      } else {
+        setExpressConnected(false);
+        toast.success("Cargo disconnected");
+      }
+    } catch {
+      toast.dismiss(id);
+      toast.error("Error disconnecting cargo");
+    }
+  };
+
+
+  // STATUS
+
+  const getStatus = async () => {
+    const res = await fetch(`${API}/status`);
+
+    const data = await res.json();
+
+    if (data.status === "error") {
+      alert("Error: " + data.message);
+    } else {
+      alert("Disconnected");
+    }
+
+    setStatus(data);
+  };
+
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="space-y-10">
+      <h1 className="text-3xl font-bold text-center">FRMCS Control Panel</h1>
+
+      {/* EXPRESS */}
+      <div className="bg-gray-800 text-white p-6 rounded-2xl shadow">
+        <h2 className="text-xl mb-4">Express</h2>
+
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={connectExpress} disabled={expressConnected} className="btn">Connect</button>
+          <button onClick={disconnectExpress} disabled={!expressConnected} className="btn bg-red-500">Disconnect</button>
+          <button onClick={stopExpress} disabled={!expressConnected} className="btn bg-yellow-500">STOP</button>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="mt-4">
+          <input
+            type="range"
+            min="-80"
+            max="80"
+            value={expressSpeed}
+            onChange={(e) => setExpressSpeed(Number(e.target.value))}
+            className="w-full"
+          />
+          <p>Speed: {expressSpeed}</p>
+          <button onClick={setExpress} className="btn mt-2">Set Speed</button>
         </div>
-      </main>
+      </div>
+
+      {/* CARGO */}
+      <div className="bg-gray-800 text-white p-6 rounded-2xl shadow">
+        <h2 className="text-xl mb-4">Cargo</h2>
+
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={connectCargo} disabled={cargoConnected} className="btn">Connect</button>
+          <button onClick={disconnectCargo} disabled={!cargoConnected} className="btn bg-red-500">Disconnect</button>
+          <button onClick={stopCargo} disabled={!cargoConnected} className="btn bg-yellow-500">STOP</button>
+        </div>
+
+        <div className="mt-4">
+          <input
+            type="range"
+            min="-80"
+            max="80"
+            value={cargoSpeed}
+            onChange={(e) => setCargoSpeed(Number(e.target.value))}
+            className="w-full"
+          />
+          <p>Speed: {cargoSpeed}</p>
+          <button onClick={setCargo} className="btn mt-2">Set Speed</button>
+        </div>
+      </div>
+
+      {/* STATUS */}
+      <div className="bg-gray-900 text-white p-6 rounded-2xl shadow">
+        <h2 className="text-xl mb-4">Status</h2>
+
+        <button onClick={getStatus} className="btn mb-4">
+          Refresh
+        </button>
+
+        {status && (
+          <pre className="bg-black p-4 rounded text-sm overflow-auto">
+            {JSON.stringify(status, null, 2)}
+          </pre>
+        )}
+      </div>
     </div>
   );
 }
