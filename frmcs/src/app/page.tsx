@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { toast } from "react-hot-toast";
+import { useEffect } from "react";
 
 
 export default function Page() {
@@ -13,6 +14,11 @@ export default function Page() {
 
 
   const API = "http://192.168.0.87:8000";
+
+
+  useEffect(() => {
+    getStatus();
+  }, []);
 
 
   const handleResponse = async (res: Response) => {
@@ -57,14 +63,17 @@ type StatusResponse = {
     }
   };
 
-  const setExpress = async () => {
-  try {
+  const changeExpress = async (delta: number) => {
+    const newSpeed = Math.max(-80, Math.min(80, expressSpeed + delta));
+    setExpressSpeed(newSpeed);
+
+    try {
       const res = await fetch(`${API}/express/speed`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ speed: expressSpeed }),
+        body: JSON.stringify({ speed: newSpeed }),
       });
 
       await handleResponse(res);
@@ -87,6 +96,28 @@ type StatusResponse = {
       }
     } catch {
       toast.error("Error stopping express");
+    }
+  };
+
+  const setExpressLight = async (brightness: number) => {
+    try {
+      const res = await fetch(`${API}/express/light`, {
+        method: "POST",
+        headers: {
+        "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ brightness }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || data.status === "error") {
+        throw new Error(data.message || "Error");
+      }
+
+      toast.success(`Light: ${data.brightness}`);
+    } catch (err: any) {
+      toast.error(err.message);
     }
   };
 
@@ -136,14 +167,17 @@ type StatusResponse = {
     }
   };
 
-  const setCargo = async () => {
+  const changeCargo = async (delta: number) => {
+    const newSpeed = Math.max(-80, Math.min(80, cargoSpeed + delta));
+    setCargoSpeed(newSpeed);
+
     try {
       const res = await fetch(`${API}/cargo/speed`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ speed: cargoSpeed }),
+        body: JSON.stringify({ speed: newSpeed }),
       });
 
       await handleResponse(res);
@@ -224,22 +258,26 @@ type StatusResponse = {
 
         <div className="flex gap-2 flex-wrap">
           <button onClick={connectExpress} disabled={expressConnected} className="btn">Connect</button>
-          <button onClick={disconnectExpress} disabled={!expressConnected} className="btn bg-red-500">Disconnect</button>
-          <button onClick={stopExpress} disabled={!expressConnected} className="btn bg-yellow-500">STOP</button>
+          <button onClick={disconnectExpress} disabled={!expressConnected} className="btn-red">Disconnect</button>
+          <button onClick={stopExpress} disabled={!expressConnected} className="btn-yellow">STOP</button>
         </div>
 
-        <div className="mt-4">
-          <input
-            type="range"
-            min="-80"
-            max="80"
-            value={expressSpeed}
-            onChange={(e) => setExpressSpeed(Number(e.target.value))}
-            className="w-full"
-          />
-          <p>Speed: {expressSpeed}</p>
-          <button onClick={setExpress} className="btn mt-2">Set Speed</button>
+        <div className="mt-4 flex gap-2">
+          <button onClick={() => changeExpress(10)} disabled={!expressConnected} className="btn-green">Speed up</button>
+          <button onClick={() => changeExpress(-10)} disabled={!expressConnected} className="btn-green">Slow down</button>
         </div>
+
+        <p className="mt-2">Speed: {expressSpeed}</p>
+
+        {/*<button onClick={changeExpress} className="btn mt-2">
+          Apply
+        </button>*/}
+
+        <div className="mt-4 flex gap-2">
+          <button onClick={() => setExpressLight(100)} disabled={!expressConnected} className="btn">Lights ON</button>
+          <button onClick={() => setExpressLight(0)} disabled={!expressConnected} className="btn">Lights OFF</button>
+        </div>
+
       </div>
 
       {/* CARGO */}
@@ -248,43 +286,40 @@ type StatusResponse = {
 
         <div className="flex gap-2 flex-wrap">
           <button onClick={connectCargo} disabled={cargoConnected} className="btn">Connect</button>
-          <button onClick={disconnectCargo} disabled={!cargoConnected} className="btn bg-red-500">Disconnect</button>
-          <button onClick={stopCargo} disabled={!cargoConnected} className="btn bg-yellow-500">STOP</button>
+          <button onClick={disconnectCargo} disabled={!cargoConnected} className="btn-red">Disconnect</button>
+          <button onClick={stopCargo} disabled={!cargoConnected} className="btn-yellow">STOP</button>
         </div>
 
-        <div className="mt-4">
-          <input
-            type="range"
-            min="-80"
-            max="80"
-            value={cargoSpeed}
-            onChange={(e) => setCargoSpeed(Number(e.target.value))}
-            className="w-full"
-          />
-          <p>Speed: {cargoSpeed}</p>
-          <button onClick={setCargo} className="btn mt-2">Set Speed</button>
+        <div className="mt-4 flex gap-2">
+          <button onClick={() => changeCargo(10)} disabled={!cargoConnected} className="btn-green">Speed up</button>
+          <button onClick={() => changeCargo(-10)} disabled={!cargoConnected} className="btn-green">Slow down</button>
         </div>
+
+        <p className="mt-2">Speed: {cargoSpeed}</p>
+
+        {/*<button onClick={setCargo} className="btn mt-2">
+          Apply
+        </button>*/}
+        {/* Lights */}
       </div>
 
       {/* STATUS */}
-      <div className="bg-black p-4 rounded text-sm space-y-2">
-    <div>
-      Express:{" "}
-      <span className={expressConnected ? "text-green-400" : "text-red-400"}>
-        {expressConnected ? "Connected" : "Disconnected"}
-      </span>{" "}
-      | Speed: {expressSpeed}
-    </div>
+      <div className="bg-white p-4 rounded text-sm space-y-2">
+        <div>
+          Express:{" "}
+          <span className={expressConnected ? "text-green-400" : "text-red-400"}>
+            {expressConnected ? "Connected" : "Disconnected"}
+          </span>{" "}
+          | Speed: {expressSpeed}
+        </div>
 
-    <div>
-      Cargo:{" "}
-      <span className={cargoConnected ? "text-green-400" : "text-red-400"}>
-        {cargoConnected ? "Connected" : "Disconnected"}
-      </span>{" "}
-      | Speed: {cargoSpeed}
-    </div>
-
-        
+        <div>
+          Cargo:{" "}
+          <span className={cargoConnected ? "text-green-400" : "text-red-400"}>
+            {cargoConnected ? "Connected" : "Disconnected"}
+          </span>{" "}
+          | Speed: {cargoSpeed}
+        </div>
       </div>
     </div>
   );
