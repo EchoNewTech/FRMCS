@@ -16,8 +16,7 @@ export default function Page() {
   const [mounted, setMounted] = useState(false);
 
 
-  //const API = "http://192.168.0.87:8000";
-  const API = "http://192.168.8.149:8000";
+  const API = process.env.NEXT_PUBLIC_HOST!;
 
 
   useEffect(() => {

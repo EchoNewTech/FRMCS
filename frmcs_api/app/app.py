@@ -3,15 +3,18 @@ import asyncio
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pydantic import BaseModel
+from dotenv import load_dotenv
+import os
 
 from app.lego_train import LegoTrain
 from app.ble_manager import BLEManager
 
 
+load_dotenv(".env.local")
 
 # MAC
-EXPRESS_MAC = "9C:9A:C0:18:86:E1"
-CARGO_MAC = "9C:9A:C0:1A:7A:AF"
+EXPRESS_MAC = os.getenv("EXPRESS_MAC")
+CARGO_MAC = os.getenv("CARGO_MAC")
 
 express = LegoTrain("Express", EXPRESS_MAC, 0)
 cargo = LegoTrain("Cargo", CARGO_MAC, 20)
@@ -44,9 +47,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+cors_origins = os.getenv("CORS_ORIGINS", "").split(",")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://192.168.0.87:3000", "http://192.168.8.149:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

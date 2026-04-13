@@ -435,6 +435,7 @@ dependencies = [
     { name = "bleak" },
     { name = "fastapi" },
     { name = "fastapi-users", extra = ["sqlalchemy"] },
+    { name = "python-dotenv" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -443,6 +444,7 @@ requires-dist = [
     { name = "bleak", specifier = ">=2.1.1" },
     { name = "fastapi", specifier = ">=0.135.1" },
     { name = "fastapi-users", extras = ["sqlalchemy"], specifier = ">=15.0.4" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.42.0" },
 ]
 
