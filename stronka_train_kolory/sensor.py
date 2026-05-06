@@ -7,7 +7,7 @@ class ColorDetector:
         self.train = train
         self.dispatcher = dispatcher
         self.port_id = port_id
-        self.last_color_code = -1
+        self.last_color_code = None
         self.status_text = "BRAK_INFO"
         self.last_rgb =  {"r": 0, "g": 0, "b": 0}
 
@@ -23,67 +23,45 @@ class ColorDetector:
         await self.train.client.write_gatt_char(LEGO_HUB_CHARACTERISTIC, payload)
         print(f"[{self.train.name}] Wysłano żądanie aktywacji czujnika (Tryb RGB). Port {self.port_id}")
 
-    def decode_rgb_to_lego_color(self, data):
-        """Zamienia surowe dane RGB z czujnika na legowski kod koloru."""
-        # W trybie RGB ramka musi mieć co najmniej 10 bajtów
-        if len(data) < 10:
-            return 0
+    def decode_rgb_to_lego_color(self, r, g, b):
+        """Zamienia przeskalowane dane RGB (0-255) na legowski kod koloru."""
         
-        # Wyciągamy wartości RGB (składamy z dwóch bajtów: Low i High)
-        r = data[4] + (data[5] << 8)
-        g = data[6] + (data[7] << 8)
-        b = data[8] + (data[9] << 8)
-        
-        # TŁUMIK TŁA (Ignorowanie jasnej podłogi i ciemnych torów)
-        if r < 100 and g < 100 and b < 100:
-            return 0
-        
-        # OBLICZANIE DOMINUJĄCEGO KOLORU
-        max_val = max(r, g, b)
-        
-        # BIAŁY (10) - wszystkie kanały jasne i o podobnej wartości
-        if abs(r - g) < 50 and abs(g - b) < 50 and max_val > 150:
-            return 10
-            
-        # ZIELONY (6) - Zielony dominuje nad czerwonym i niebieskim
-        if g == max_val and g > r + 30 and g > b + 30:
-            return 6
-            
-        # NIEBIESKI (3) - Niebieski dominuje nad resztą
-        if b == max_val and b > r + 30 and b > g + 20:
-            return 3
-            
-        # ŻÓŁTY (7) - Mieszanka czerwonego i zielonego, bardzo mało niebieskiego
-        if abs(r - g) < 60 and r > 150 and g > 150 and b < r - 50:
-            return 7
-            
-        # CZERWONY (9) - Czerwony wyraźnie dominuje
-        if r == max_val and r > g + 50 and r > b + 50:
-            return 9
+        # Próg szumu (Tłumik tła) - odrzucamy bardzo ciemne odczyty
+        if r < 20 and g < 20 and b < 20:
+            return None
 
-        # Jeśli światło nie pasuje do żadnego z naszych klocków, uznajemy za "BRAK"
-        return 0
+        # Automatyczne dopasowanie do konfiguracji
+        for code, cfg in COLORS_CONFIG.items():
+            if "rgb_range" not in cfg:
+                continue
+                
+            ranges = cfg["rgb_range"]
+            # Sprawdzamy czy R, G i B mieszczą się w zdefiniowanych widełkach
+            match_r = ranges["r"][0] <= r <= ranges["r"][1]
+            match_g = ranges["g"][0] <= g <= ranges["g"][1]
+            match_b = ranges["b"][0] <= b <= ranges["b"][1]
+            
+            if match_r and match_g and match_b:
+                return code
+
+        return None
 
     def process_notification(self, data):
-        """Przetwarza przychodzące dane z Huba."""
         if len(data) >= 10 and data[2] == 0x45 and data[3] == self.port_id:
-            
-            # --- ZAPISYWANIE DANYCH DO PODGLĄDU NA ŻYWO ---
-            r = data[4] + (data[5] << 8)
-            g = data[6] + (data[7] << 8)
-            b = data[8] + (data[9] << 8)
-            self.last_rgb = {"r": r, "g": g, "b": b} 
-            # ----------------------------------------------
-            
-            color_code = self.decode_rgb_to_lego_color(data)
-            
-            # Reagujemy tylko na faktyczną ZMIANĘ koloru
-            if color_code != self.last_color_code:
-                # Nie chcemy wywoływać akcji "BRAK_INFO", jeśli zmienił się po prostu odcień tła
-                if color_code != 0 or self.last_color_code != -1: 
-                    self.last_color_code = color_code
-                    asyncio.create_task(self.handle_color(color_code))
+            # Skalowanie danych RGB[cite: 6]
+            r = min(255, int((data[4] + (data[5] << 8)) / 4))
+            g = min(255, int((data[6] + (data[7] << 8)) / 4))
+            b = min(255, int((data[8] + (data[9] << 8)) / 4))
 
+            self.last_rgb = {"r": r, "g": g, "b": b} 
+            color_code = self.decode_rgb_to_lego_color(r, g, b)
+            
+            # Reagujemy na zmianę (jeśli kolor jest inny niż poprzedni)[cite: 6]
+            if color_code != self.last_color_code:
+                self.last_color_code = color_code
+                if color_code is not None:
+                    asyncio.create_task(self.handle_color(color_code))
+                    
     async def handle_color(self, code):
         """Główna logika wykonywania akcji (Stop, Zwolnij, Strefy)."""
         try:

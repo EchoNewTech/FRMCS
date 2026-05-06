@@ -126,7 +126,7 @@ async def api_stop(tid: str):
     return {"status": "stopped", "speed": 0}
 
 @app.post("/api/simulate/{tid}/{color_code}")
-async def api_simulate_color(tid: str, color_code: int):
+async def api_simulate_color(tid: str, color_code: str):
     t = trains.get(tid)
     if t and getattr(t, 'detector', None):
         await t.detector.handle_color(color_code)

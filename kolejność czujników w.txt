@@ -1,0 +1,3 @@
+kolejność czujników w hubie od podłączenia do rb
+1 akcelerometr + żyroskop + kompas
+
