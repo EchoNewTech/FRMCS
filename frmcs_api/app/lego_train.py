@@ -1,86 +1,70 @@
-from bleak import BleakClient
-import time
 import asyncio
+from bleak import BleakClient
+from app.sensor import ColorDetector
+from app.constants import LEGO_HUB_CHARACTERISTIC
 
-
-
-LEGO_HUB_CHARACTERISTIC = "00001624-1212-efde-1623-785feabcd123"
-
+ble_lock = asyncio.Lock()
 
 class LegoTrain:
-    def __init__(self, name, mac, start_pos=0):
-        self.name = name
-        self.mac = mac
-        self.client = None
-        self.speed = 0
-        self.pos = float(start_pos)
-        self.last_update = time.time()
-        self.light = 0
-        self.light_on = False
+    def __init__(self, name: str, mac: str, train_type: str = "standard"):
+        self.name, self.mac, self.train_type = name, mac, train_type
+        self.client, self.speed, self.detector = None, 0, None
+        self.rgb, self.section = {"r": 0, "g": 0, "b": 0}, "DISCONNECTED"
 
-    async def connect(self):
-        if self.client and self.client.is_connected:
-            return
+    @property
+    def is_connected(self):
+        # BleakClient może istnieć, ale nie być połączony - to musimy sprawdzać
+        return self.client is not None and self.client.is_connected
 
-        print(f"Connecting with {self.name}...")
-        self.client = BleakClient(self.mac)
-        await self.client.connect()
-        print(f"{self.name} connected")
+    async def connect(self, dispatcher=None):
+        if self.is_connected: return
+        async with ble_lock:
+            print(f"[{self.name}] Connecting to {self.mac}...")
+            for attempt in range(3):
+                try:
+                    self.client = BleakClient(self.mac)
+                    await self.client.connect(timeout=20.0)
+                    
+                    # Po połączeniu od razu startujemy powiadomienia
+                    await self.client.start_notify(LEGO_HUB_CHARACTERISTIC, self.notification_handler)
+                    await asyncio.sleep(1.0)
+                    
+                    self.detector = ColorDetector(self, dispatcher)
+                    await self.detector.setup_sensor()
+                    
+                    self.section = "DRIVING"
+                    print(f"[{self.name}] Connected successfully.")
+                    break
+                except Exception as e:
+                    print(f"[{self.name}] Attempt {attempt + 1} failed: {e}")
+                    if self.client:
+                        await self.client.disconnect()
+                    self.client = None # CZYŚCIMY, żeby is_connected było False
+                    if attempt == 2:
+                        self.section = "ERROR"
+                        raise e
+                    await asyncio.sleep(2)
 
-    async def send_speed(self, speed):
-        self.speed = max(-80, min(80, speed))
+    async def disconnect(self):
+        self.detector = None
+        if self.is_connected:
+            try:
+                await self.send_speed(0)
+                await self.client.disconnect()
+            except:
+                pass
+        self.client, self.section = None, "DISCONNECTED"
 
-        if not self.client or not self.client.is_connected:
-            raise Exception("Train not connected")
+    def notification_handler(self, sender, data):
+        if self.detector:
+            self.detector.process_notification(data)
 
-        speed_val = int(self.speed).to_bytes(1, byteorder='little', signed=True)[0]
+    async def send_speed(self, speed: int):
+        if not self.is_connected: return
+        self.speed = max(-100, min(100, speed))
+        speed_val = int(self.speed).to_bytes(1, byteorder="little", signed=True)[0]
         payload = bytearray([0x08, 0x00, 0x81, 0x00, 0x11, 0x51, 0x00, speed_val])
-
         await self.client.write_gatt_char(LEGO_HUB_CHARACTERISTIC, payload)
-    
-    async def change_speed(self, delta: int):
-        await self.send_speed(self.speed + delta)
 
     async def stop(self):
-        self.speed = 0
         await self.send_speed(0)
-        
-    async def set_light(self, brightness: int):
-        try:
-            brightness = max(0, min(100, int(brightness)))
-
-            if not self.client or not self.client.is_connected:
-                await self.connect()
-                await asyncio.sleep(1)
-
-            payload = bytearray([
-                0x08, 0x00, 0x81,
-                0x01,
-                0x11,
-                0x51,
-                0x00,
-                brightness
-            ])
-
-            await self.client.write_gatt_char(LEGO_HUB_CHARACTERISTIC, payload)
-
-            self.light = brightness
-            self.light_on = brightness > 0
-
-            return {
-                "status": "success",
-                "brightness": brightness
-            }
-
-        except Exception as e:
-            print(f"\nBłąd komunikacji z {self.name} (Światła): {e}")
-            return {
-                "status": "error",
-                "message": str(e)
-            }
-    
-    async def disconnect(self):
-        if self.client and self.client.is_connected:
-            await self.client.disconnect()
-            print(f"{self.name} disconnected")
-

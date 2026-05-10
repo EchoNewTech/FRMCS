@@ -24,4 +24,3 @@ class BLEManager:
         speed_byte = speed & 0xFF
         command = bytearray([0x08, 0x00, 0x81, 0x00, 0x11, 0x51, 0x00, speed_byte])
         await self.client.write_gatt_char(UUID_LEGO, command)
-
