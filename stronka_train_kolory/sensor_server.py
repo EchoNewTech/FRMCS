@@ -4,8 +4,7 @@ from fastapi.responses import HTMLResponse
 import board
 import uvicorn
 
-# Próba importu bibliotek z obsługą błędów, 
-# aby brak jednej nie blokował działania całości.
+# Próba importu bibliotek z obsługą błędów
 try:
     import adafruit_bme680
 except ImportError:
@@ -26,66 +25,66 @@ class TelemetrySensors:
             print(f"[SENSORY] Błąd sprzętowy I2C: {e}")
             self.i2c = None
 
-        # --- Inicjalizacja BME680 (Temperatura, Wilgotność, Ciśnienie, Gaz) ---
+        # --- 1. BME680 (Temperatura, Wilgotność, Ciśnienie, Gaz) ---
         self.bme = None
         if self.i2c and adafruit_bme680:
             try:
-                # Adres standardowy to 0x76 lub 0x77
                 self.bme = adafruit_bme680.Adafruit_BME680_I2C(self.i2c)
-                self.bme.sea_level_pressure = 1013.25 # Do obliczania wysokości
+                self.bme.sea_level_pressure = 1013.25 
                 print("[SENSORY] BME680 podłączony poprawnie.")
             except Exception as e:
                 print(f"[SENSORY] Nie znaleziono BME680 na I2C: {e}")
 
-        # --- Inicjalizacja LSM6DS3 (Akcelerometr, Żyroskop) ---
+        # --- 2. LSM6DS3 (Akcelerometr, Żyroskop Grove 6-axis v1.0) ---
         self.lsm = None
         if self.i2c and LSM6DS3:
             try:
-                # Adres standardowy to 0x6A lub 0x6B
                 self.lsm = LSM6DS3(self.i2c)
                 print("[SENSORY] LSM6DS3 podłączony poprawnie.")
             except Exception as e:
                 print(f"[SENSORY] Nie znaleziono LSM6DS3 na I2C: {e}")
 
-        # --- Inicjalizacja Kompasu Grove V2.0 (BMM150) ---
+        # --- 3. Kompas Grove 3-Axis v2.0 (BMM150) ---
         self.compass_detected = False
+        self.heading_mock = 0 # Zmienna pomocnicza do panelu, jeśli brakuje sterownika
         try:
-            # Skrypt skanuje urządzenia I2C, adres BMM150 to zazwyczaj 0x13
             import smbus2
             bus = smbus2.SMBus(1)
+            # Adres 0x13 to domyślny adres kompasu BMM150 na magistrali I2C
             bus.read_byte(0x13)
             self.compass_detected = True
-            print("[SENSORY] Kompas V2 (0x13) wykryty.")
+            print("[SENSORY] Kompas Grove v2.0 (0x13) podłączony poprawnie.")
         except Exception:
-            pass
+            print("[SENSORY] Nie znaleziono Kompasu (0x13).")
 
     def get_all_data(self):
-        """Zwraca słownik z kompletem dostępnych pomiarów."""
         data = {
             "environment": {"temperature_c": None, "humidity_percent": None, "pressure_hpa": None, "gas_ohms": None},
             "motion": {"accel_m_s2": None, "gyro_rad_s": None},
-            "compass": {"detected": self.compass_detected, "heading": None}
+            "compass": {"detected": self.compass_detected, "heading_deg": None}
         }
 
-        # Odczyt BME680
         if self.bme:
             try:
                 data["environment"]["temperature_c"] = round(self.bme.temperature, 2)
                 data["environment"]["humidity_percent"] = round(self.bme.humidity, 2)
                 data["environment"]["pressure_hpa"] = round(self.bme.pressure, 2)
                 data["environment"]["gas_ohms"] = round(self.bme.gas, 2)
-            except Exception as e:
-                pass
+            except Exception: pass
 
-        # Odczyt LSM6DS3
         if self.lsm:
             try:
                 accel_x, accel_y, accel_z = self.lsm.acceleration
                 gyro_x, gyro_y, gyro_z = self.lsm.gyro
                 data["motion"]["accel_m_s2"] = {"x": round(accel_x, 2), "y": round(accel_y, 2), "z": round(accel_z, 2)}
                 data["motion"]["gyro_rad_s"] = {"x": round(gyro_x, 2), "y": round(gyro_y, 2), "z": round(gyro_z, 2)}
-            except Exception as e:
-                pass
+            except Exception: pass
+
+        if self.compass_detected:
+            # Tu w przyszłości można dodać pełną matematykę z rejestrów smbus2.
+            # Na razie symulujemy odczyt, aby sprawdzić interfejs.
+            self.heading_mock = (self.heading_mock + 5) % 360
+            data["compass"]["heading_deg"] = self.heading_mock
 
         return data
 
@@ -94,7 +93,7 @@ class TelemetrySensors:
 app = FastAPI()
 sensors = TelemetrySensors()
 
-# KOD HTML PANELU DIAGNOSTYCZNEGO
+# KOD HTML PANELU DIAGNOSTYCZNEGO (DODANO KOMPAS)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -109,13 +108,13 @@ HTML_TEMPLATE = """
         <span class="w-3 h-3 rounded-full bg-green-500 animate-ping"></span>
         Węzeł Sensoryczny (RPi Zero)
     </h1>
-    <p class="text-gray-400 text-sm mb-8">Odświeżanie na żywo co 1 sekundę</p>
+    <p class="text-gray-400 text-sm mb-8">Odświeżanie na żywo co 0.5 sekundy</p>
 
-    <div class="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div class="w-full max-w-5xl grid grid-cols-1 md:grid-cols-3 gap-6">
         
-        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg col-span-1 md:col-span-2">
             <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 pb-2 mb-4">Środowisko (BME680)</h2>
-            <div class="grid grid-cols-2 gap-4 text-center">
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
                 <div class="bg-gray-900 p-3 rounded">
                     <span class="text-xs text-gray-500 uppercase block mb-1">Temperatura</span>
                     <span id="temp" class="text-2xl font-mono text-orange-400">-- °C</span>
@@ -135,20 +134,37 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
-            <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 pb-2 mb-4">Ruch (LSM6DS3)</h2>
-            <div class="space-y-4">
-                <div class="bg-gray-900 p-3 rounded">
-                    <span class="text-xs text-gray-500 uppercase block mb-1">Akcelerometr (m/s²)</span>
-                    <div class="flex justify-between font-mono text-sm">
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg text-center flex flex-col justify-center items-center">
+            <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 w-full pb-2 mb-4">Kompas v2.0</h2>
+            <div id="compass-status" class="text-xs font-bold px-3 py-1 rounded bg-red-900 text-red-400 mb-4 uppercase">Nie wykryto</div>
+            
+            <div class="relative w-24 h-24 rounded-full border-4 border-gray-600 flex items-center justify-center">
+                <span class="absolute top-1 text-xs font-bold text-gray-500">N</span>
+                <span class="absolute bottom-1 text-xs font-bold text-gray-500">S</span>
+                <span class="absolute left-1 text-xs font-bold text-gray-500">W</span>
+                <span class="absolute right-1 text-xs font-bold text-gray-500">E</span>
+                
+                <div id="compass-needle" class="absolute w-1 h-16 bg-gradient-to-t from-transparent via-red-500 to-red-600 rounded-full transition-transform duration-300 origin-center" style="transform: rotate(0deg);"></div>
+                
+                <div class="w-3 h-3 bg-white rounded-full z-10"></div>
+            </div>
+            <div class="mt-4 text-xl font-mono text-yellow-400"><span id="heading-val">--</span>°</div>
+        </div>
+
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg col-span-1 md:col-span-3">
+            <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 pb-2 mb-4">Ruch i Wibracje (LSM6DS3)</h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bg-gray-900 p-4 rounded text-center">
+                    <span class="text-xs text-gray-500 uppercase block mb-3">Akcelerometr (m/s²)</span>
+                    <div class="flex justify-center gap-8 font-mono text-lg">
                         <span class="text-red-400">X: <span id="acc-x" class="text-white">--</span></span>
                         <span class="text-green-400">Y: <span id="acc-y" class="text-white">--</span></span>
                         <span class="text-blue-400">Z: <span id="acc-z" class="text-white">--</span></span>
                     </div>
                 </div>
-                <div class="bg-gray-900 p-3 rounded">
-                    <span class="text-xs text-gray-500 uppercase block mb-1">Żyroskop (rad/s)</span>
-                    <div class="flex justify-between font-mono text-sm">
+                <div class="bg-gray-900 p-4 rounded text-center">
+                    <span class="text-xs text-gray-500 uppercase block mb-3">Żyroskop (rad/s)</span>
+                    <div class="flex justify-center gap-8 font-mono text-lg">
                         <span class="text-red-400">X: <span id="gyr-x" class="text-white">--</span></span>
                         <span class="text-green-400">Y: <span id="gyr-y" class="text-white">--</span></span>
                         <span class="text-blue-400">Z: <span id="gyr-z" class="text-white">--</span></span>
@@ -164,6 +180,7 @@ HTML_TEMPLATE = """
                 const response = await fetch('/api/telemetry');
                 const data = await response.json();
                 
+                // BME680
                 const env = data.environment;
                 if (env.temperature_c !== null) {
                     document.getElementById('temp').innerText = env.temperature_c + ' °C';
@@ -172,6 +189,21 @@ HTML_TEMPLATE = """
                     document.getElementById('gas').innerText = (env.gas_ohms / 1000).toFixed(1) + ' kΩ';
                 }
 
+                // Kompas
+                const comp = data.compass;
+                const compStatus = document.getElementById('compass-status');
+                if (comp.detected) {
+                    compStatus.innerText = "Aktywny (I2C: 0x13)";
+                    compStatus.className = "text-xs font-bold px-3 py-1 rounded bg-green-900 text-green-400 mb-4 uppercase";
+                    
+                    if (comp.heading_deg !== null) {
+                        document.getElementById('heading-val').innerText = comp.heading_deg;
+                        // Obracanie strzałki w CSS
+                        document.getElementById('compass-needle').style.transform = `rotate(${comp.heading_deg}deg)`;
+                    }
+                }
+
+                // LSM6DS3
                 const mot = data.motion;
                 if (mot.accel_m_s2 !== null) {
                     document.getElementById('acc-x').innerText = mot.accel_m_s2.x;
@@ -187,23 +219,20 @@ HTML_TEMPLATE = """
             }
         }
 
-        // Odświeżaj dane co 1000 milisekund (1 sekunda)
-        setInterval(fetchTelemetry, 1000);
-        fetchTelemetry(); // Pierwsze wywołanie od razu
+        // Odświeżanie 2 razy na sekundę dla płynniejszego działania żyroskopu i kompasu
+        setInterval(fetchTelemetry, 500);
+        fetchTelemetry();
     </script>
 </body>
 </html>
 """
 
-# Zwracanie interfejsu graficznego w przeglądarce
 @app.get("/", response_class=HTMLResponse)
 def index():
     return HTML_TEMPLATE
 
-# Główne API zwracające dane dla Raspberry Pi 4 (lub skryptu JS wyżej)
 @app.get("/api/telemetry")
 def get_telemetry():
-    """Zwraca aktualne odczyty z czujników I2C jako JSON"""
     return sensors.get_all_data()
 
 def get_local_ip():
