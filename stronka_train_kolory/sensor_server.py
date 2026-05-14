@@ -3,6 +3,8 @@ from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 import board
 import uvicorn
+import time
+import math
 
 # Próba importu bibliotek z obsługą błędów
 try:
@@ -29,7 +31,6 @@ class TelemetrySensors:
         self.bme = None
         if self.i2c and adafruit_bme680:
             try:
-                # Wpisujemy jawnie address=0x76
                 self.bme = adafruit_bme680.Adafruit_BME680_I2C(self.i2c, address=0x76)
                 self.bme.sea_level_pressure = 1013.25 
                 print("[SENSORY] BME680 podłączony poprawnie (0x76).")
@@ -47,21 +48,20 @@ class TelemetrySensors:
 
         # --- 3. Kompas Grove 3-Axis v2.0 (BMM150) ---
         self.compass_detected = False
-        self.heading_mock = 0 
         try:
             import smbus2
-            bus = smbus2.SMBus(1)
-            # Wiemy z i2cdetect, że jest pod 0x13. Zamiast czytać w ciemno, 
-            # próbujemy odczytać rejestr CHIP ID (0x40).
-            try:
-                chip_id = bus.read_byte_data(0x13, 0x40)
-                print(f"[SENSORY] Kompas podłączony (0x13). Chip ID: {hex(chip_id)}")
-            except Exception:
-                # Nawet jeśli odczyt ID się nie udał, i2cdetect go widzi, więc włączamy UI
-                print("[SENSORY] Kompas jest na I2C (0x13), ale odczyt rejestru wymaga inicjalizacji.")
+            self.bus = smbus2.SMBus(1)
+            
+            # Wzbudzanie kompasu BMM150 z trybu uśpienia
+            self.bus.read_byte_data(0x13, 0x40) # Sprawdzenie czy żyje
+            self.bus.write_byte_data(0x13, 0x4B, 0x01) # Power ON (Włącz zasilanie)
+            time.sleep(0.01)
+            self.bus.write_byte_data(0x13, 0x4C, 0x00) # Tryb normalny (Ciągły pomiar)
+            
             self.compass_detected = True
-        except ImportError:
-            print("[SENSORY] BŁĄD: Brak biblioteki smbus2! Zainstaluj ją przez: pip install smbus2")
+            print("[SENSORY] Kompas BMM150 wybudzony i działa (0x13).")
+        except Exception as e:
+            print(f"[SENSORY] Błąd inicjalizacji kompasu: {e}")
 
     def get_all_data(self):
         data = {
@@ -87,13 +87,27 @@ class TelemetrySensors:
             except Exception: pass
 
         if self.compass_detected:
-            # Tu w przyszłości można dodać pełną matematykę z rejestrów smbus2.
-            # Na razie symulujemy odczyt, aby sprawdzić interfejs.
-            self.heading_mock = (self.heading_mock + 5) % 360
-            data["compass"]["heading_deg"] = self.heading_mock
+            try:
+                # Odczyt 6 surowych bajtów danych magnetycznych z osi X i Y
+                data_bytes = self.bus.read_i2c_block_data(0x13, 0x42, 6)
+                
+                # BMM150 przesyła dane w specjalnym 13-bitowym formacie. Trzeba je połączyć.
+                x = (data_bytes[1] << 5) | (data_bytes[0] >> 3)
+                if x > 4095: x -= 8192  # Zamiana na wartości ujemne (Two's complement)
+                
+                y = (data_bytes[3] << 5) | (data_bytes[2] >> 3)
+                if y > 4095: y -= 8192
+
+                # Obliczenie realnego kąta (heading) na podstawie pola magnetycznego
+                heading = math.atan2(y, x) * (180.0 / math.pi)
+                if heading < 0:
+                    heading += 360
+                    
+                data["compass"]["heading_deg"] = int(heading)
+            except Exception: 
+                pass
 
         return data
-
 
 # === INICJALIZACJA SERWERA ===
 app = FastAPI()
