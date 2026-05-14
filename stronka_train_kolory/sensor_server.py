@@ -31,18 +31,14 @@ class TelemetrySensors:
             try:
                 self.bme = adafruit_bme680.Adafruit_BME680_I2C(self.i2c, address=0x76)
                 self.bme.sea_level_pressure = 1013.25 
-                print("[SENSORY] BME680 podłączony poprawnie (0x76).")
-            except Exception as e:
-                print(f"[SENSORY] Nie znaleziono BME680 (0x76): {e}")
+            except Exception: pass
 
         # --- LSM6DS3 ---
         self.lsm = None
         if self.i2c and LSM6DS3:
             try:
                 self.lsm = LSM6DS3(self.i2c)
-                print("[SENSORY] LSM6DS3 podłączony poprawnie (0x6a).")
-            except Exception as e:
-                print(f"[SENSORY] Nie znaleziono LSM6DS3 (0x6a): {e}")
+            except Exception: pass
 
         # --- KOMPAS BMM150 ---
         self.compass_detected = False
@@ -54,9 +50,7 @@ class TelemetrySensors:
             time.sleep(0.01)
             self.bus.write_byte_data(0x13, 0x4C, 0x00) 
             self.compass_detected = True
-            print("[SENSORY] Kompas BMM150 działa (0x13).")
-        except Exception as e:
-            print(f"[SENSORY] Błąd inicjalizacji kompasu: {e}")
+        except Exception: pass
 
         # --- Zmienne Inercyjne ---
         self.last_time = time.time()
@@ -64,31 +58,36 @@ class TelemetrySensors:
         self.velocity = [0.0, 0.0, 0.0]
         self.position = [0.0, 0.0, 0.0]
         
-        # Wykonaj pierwszą kalibrację przy starcie
         self.calibrate_accelerometer()
 
     def calibrate_accelerometer(self):
-        """Pobiera próbki w spoczynku, by wyzerować grawitację i błędy montażu"""
+        """Pobiera 50 próbek (ok 1s) by uśrednić szumy i idealnie wyzerować grawitację"""
         if self.lsm:
-            print("[SENSORY] Kalibracja akcelerometru... Proszę nie ruszać czujnikiem.")
+            print("[SENSORY] Rozpoczynam kalibrację. PROSZĘ NIE RUSZAĆ PŁYTKĄ...")
             ox, oy, oz = 0.0, 0.0, 0.0
-            samples = 10
-            for _ in range(samples):
+            valid_samples = 0
+            
+            for _ in range(50):
                 try:
                     x, y, z = self.lsm.acceleration
                     ox += x
                     oy += y
                     oz += z
-                except Exception:
+                    valid_samples += 1
+                except Exception: 
                     pass
                 time.sleep(0.02)
-            self.accel_offset = [ox / samples, oy / samples, oz / samples]
+                
+            if valid_samples > 0:
+                self.accel_offset = [ox / valid_samples, oy / valid_samples, oz / valid_samples]
+                print(f"[SENSORY] Kalibracja OK ({valid_samples}/50 próbek). Offset: X={self.accel_offset[0]:.2f}, Y={self.accel_offset[1]:.2f}, Z={self.accel_offset[2]:.2f}")
+            else:
+                print("[SENSORY] BŁĄD KALIBRACJI: Czujnik nie odpowiadał.")
         
-        # Zerowanie logiki ruchu
+        # Wyzerowanie prędkości i dystansu po kalibracji
         self.velocity = [0.0, 0.0, 0.0]
         self.position = [0.0, 0.0, 0.0]
         self.last_time = time.time()
-        print(f"[SENSORY] Kalibracja zakończona. Offset: {self.accel_offset}")
 
     def get_env_data(self):
         data = {"environment": {"temperature_c": None, "humidity_percent": None, "pressure_hpa": None, "gas_ohms": None}}
@@ -98,18 +97,24 @@ class TelemetrySensors:
                 data["environment"]["humidity_percent"] = round(self.bme.humidity, 2)
                 data["environment"]["pressure_hpa"] = round(self.bme.pressure, 2)
                 data["environment"]["gas_ohms"] = round(self.bme.gas, 2)
-            except Exception as e:
-                print(f"[BŁĄD BME680]: {e}")
+            except Exception: pass
         return data
 
     def get_motion_data(self):
         data = {
             "motion": {
                 "accel_filtered_m_s2": None,
+                "total_accel_m_s2": None,
+                
                 "velocity_m_s": None, 
+                "total_velocity_m_s": None,
+                "total_velocity_km_h": None,
+                
                 "position_m": None, 
                 "total_position_m": None,
-                "gyro_rad_s": None
+                
+                "gyro_rad_s": None,
+                "total_gyro_rad_s": None
             },
             "compass": {"detected": self.compass_detected, "heading_deg": None}
         }
@@ -123,41 +128,44 @@ class TelemetrySensors:
                 ax, ay, az = self.lsm.acceleration
                 gx, gy, gz = self.lsm.gyro
                 
-                # 1. Usuwanie grawitacji (Tarowanie)
                 ax_comp = ax - self.accel_offset[0]
                 ay_comp = ay - self.accel_offset[1]
                 az_comp = az - self.accel_offset[2]
                 
-                # 2. Martwa strefa (Ignorowanie mikroszumów stołu)
-                deadband = 0.20
+                # Zwiększony deadband, by lepiej ignorować leciutkie wibracje stołu po kalibracji
+                deadband = 0.35
                 if abs(ax_comp) < deadband: ax_comp = 0.0
                 if abs(ay_comp) < deadband: ay_comp = 0.0
                 if abs(az_comp) < deadband: az_comp = 0.0
 
-                # Zapisujemy czyste przyspieszenie do wysłania
-                data["motion"]["accel_filtered_m_s2"] = {"x": round(ax_comp, 2), "y": round(ay_comp, 2), "z": round(az_comp, 2)}
+                total_accel = math.sqrt(ax_comp**2 + ay_comp**2 + az_comp**2)
 
-                # 3. Całkowanie do PRĘDKOŚCI
                 self.velocity[0] += ax_comp * dt
                 self.velocity[1] += ay_comp * dt
                 self.velocity[2] += az_comp * dt
-
-                # Tłumienie prędkości (aby pociąg sam się zatrzymał)
                 self.velocity = [v * 0.95 for v in self.velocity]
+                total_vel = math.sqrt(self.velocity[0]**2 + self.velocity[1]**2 + self.velocity[2]**2)
 
-                # 4. Całkowanie do POZYCJI
                 self.position[0] += self.velocity[0] * dt
                 self.position[1] += self.velocity[1] * dt
                 self.position[2] += self.velocity[2] * dt
-
                 total_pos = math.sqrt(self.position[0]**2 + self.position[1]**2 + self.position[2]**2)
                 
+                total_gyro = math.sqrt(gx**2 + gy**2 + gz**2)
+                
+                data["motion"]["accel_filtered_m_s2"] = {"x": round(ax_comp, 2), "y": round(ay_comp, 2), "z": round(az_comp, 2)}
+                data["motion"]["total_accel_m_s2"] = round(total_accel, 2)
+                
                 data["motion"]["velocity_m_s"] = {"x": round(self.velocity[0], 2), "y": round(self.velocity[1], 2), "z": round(self.velocity[2], 2)}
+                data["motion"]["total_velocity_m_s"] = round(total_vel, 2)
+                data["motion"]["total_velocity_km_h"] = round(total_vel * 3.6, 2) 
+                
                 data["motion"]["position_m"] = {"x": round(self.position[0], 2), "y": round(self.position[1], 2), "z": round(self.position[2], 2)}
                 data["motion"]["total_position_m"] = round(total_pos, 2)
+                
                 data["motion"]["gyro_rad_s"] = {"x": round(gx, 2), "y": round(gy, 2), "z": round(gz, 2)}
-            except Exception as e:
-                print(f"[BŁĄD LSM6DS3]: {e}")
+                data["motion"]["total_gyro_rad_s"] = round(total_gyro, 2)
+            except Exception: pass
 
         if self.compass_detected:
             try:
@@ -169,8 +177,7 @@ class TelemetrySensors:
                 heading = math.atan2(y, x) * (180.0 / math.pi)
                 if heading < 0: heading += 360
                 data["compass"]["heading_deg"] = int(heading)
-            except Exception as e:
-                print(f"[BŁĄD BMM150]: {e}")
+            except Exception: pass
             
         return data
 
@@ -197,7 +204,7 @@ HTML_TEMPLATE = """
     </h1>
     <p class="text-gray-400 text-sm mb-8">Ruch: 0.5s | Środowisko: 1.0s</p>
 
-    <div class="w-full max-w-5xl grid grid-cols-1 md:grid-cols-3 gap-6">
+    <div class="w-full max-w-6xl grid grid-cols-1 md:grid-cols-3 gap-6">
         
         <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg col-span-1 md:col-span-2 relative">
             <div class="absolute top-4 right-4 flex items-center gap-2">
@@ -248,40 +255,49 @@ HTML_TEMPLATE = """
         <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg col-span-1 md:col-span-3">
             <div class="flex justify-between border-b border-gray-600 pb-2 mb-4 items-center">
                 <h2 class="text-xl font-bold text-gray-300">Nawigacja Inercyjna (LSM6DS3)</h2>
-                <button onclick="resetPosition()" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-1 px-3 rounded shadow transition-colors">KALIBRUJ / ZERUJ</button>
+                <button onclick="resetPosition(this)" class="bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-1 px-3 rounded shadow transition-colors">KALIBRUJ / ZERUJ</button>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
                 
-                <div class="bg-gray-900 p-4 rounded text-center border-t-4 border-yellow-500">
-                    <span class="text-xs text-gray-500 uppercase block mb-3">Przyspieszenie (m/s²)</span>
-                    <div class="flex justify-center gap-4 font-mono text-xs pt-2">
+                <div class="bg-gray-900 p-4 rounded text-center border-t-4 border-yellow-500 flex flex-col justify-between">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Przyspieszenie</span>
+                    <span id="acc-total" class="text-3xl font-bold font-mono text-yellow-400 block mb-3">0.00 <span class="text-sm text-gray-500 font-normal">m/s²</span></span>
+                    <div class="flex justify-center gap-3 font-mono text-[10px] pt-2 border-t border-gray-700">
                         <span class="text-red-400">X: <span id="acc-x" class="text-white">0.0</span></span>
                         <span class="text-green-400">Y: <span id="acc-y" class="text-white">0.0</span></span>
                         <span class="text-blue-400">Z: <span id="acc-z" class="text-white">0.0</span></span>
                     </div>
                 </div>
 
-                <div class="bg-gray-900 p-4 rounded text-center border-t-4 border-blue-500">
-                    <span class="text-xs text-gray-500 uppercase block mb-3">Prędkość (m/s)</span>
-                    <div class="flex justify-center gap-4 font-mono text-xs pt-2">
+                <div class="bg-gray-900 p-4 rounded text-center border-t-4 border-blue-500 flex flex-col justify-between">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Prędkość</span>
+                    <span id="vel-total-kmh" class="text-3xl font-bold font-mono text-blue-400 block">0.00 <span class="text-sm text-gray-500 font-normal">km/h</span></span>
+                    <span id="vel-total-ms" class="text-xs font-mono text-gray-500 block mb-3">0.00 m/s</span>
+                    <div class="flex justify-center gap-3 font-mono text-[10px] pt-2 border-t border-gray-700">
                         <span class="text-red-400">X: <span id="vel-x" class="text-white">0.0</span></span>
                         <span class="text-green-400">Y: <span id="vel-y" class="text-white">0.0</span></span>
                         <span class="text-blue-400">Z: <span id="vel-z" class="text-white">0.0</span></span>
                     </div>
                 </div>
 
-                <div class="bg-gray-900 p-4 rounded text-center border-t-4 border-green-500">
-                    <span class="text-xs text-gray-500 uppercase block mb-3">Przemieszczenie (m)</span>
-                    <div class="flex justify-center gap-4 font-mono text-xs pt-2">
+                <div class="bg-gray-900 p-4 rounded text-center border-t-4 border-purple-500 flex flex-col justify-between">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Przebyty Dystans</span>
+                    <span id="pos-total" class="text-3xl font-bold font-mono text-purple-400 block mb-3">0.00 <span class="text-sm text-gray-500 font-normal">m</span></span>
+                    <div class="flex justify-center gap-3 font-mono text-[10px] pt-2 border-t border-gray-700">
                         <span class="text-red-400">X: <span id="pos-x" class="text-white">0.0</span></span>
                         <span class="text-green-400">Y: <span id="pos-y" class="text-white">0.0</span></span>
                         <span class="text-blue-400">Z: <span id="pos-z" class="text-white">0.0</span></span>
                     </div>
                 </div>
-
-                <div class="bg-gray-900 p-4 rounded text-center border-t-4 border-purple-500 flex flex-col justify-center">
-                    <span class="text-xs text-gray-500 uppercase block mb-1">Dystans Całkowity</span>
-                    <span id="pos-total" class="text-3xl font-bold font-mono text-purple-400 block mt-1">0.00 <span class="text-sm text-gray-500 font-normal">m</span></span>
+                
+                <div class="bg-gray-900 p-4 rounded text-center border-t-4 border-green-500 flex flex-col justify-between">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Rotacja (Wibracje)</span>
+                    <span id="gyr-total" class="text-3xl font-bold font-mono text-green-400 block mb-3">0.00 <span class="text-sm text-gray-500 font-normal">rad/s</span></span>
+                    <div class="flex justify-center gap-3 font-mono text-[10px] pt-2 border-t border-gray-700">
+                        <span class="text-red-400">X: <span id="gyr-x" class="text-white">0.0</span></span>
+                        <span class="text-green-400">Y: <span id="gyr-y" class="text-white">0.0</span></span>
+                        <span class="text-blue-400">Z: <span id="gyr-z" class="text-white">0.0</span></span>
+                    </div>
                 </div>
 
             </div>
@@ -297,11 +313,24 @@ HTML_TEMPLATE = """
             }
         }
 
-        async function resetPosition() {
-            // Animacja przycisku
-            event.target.innerText = "KALIBRUJĘ...";
-            await fetch('/api/telemetry/reset', {method: 'POST'});
-            setTimeout(() => { event.target.innerText = "KALIBRUJ / ZERUJ"; }, 500);
+        async function resetPosition(btnElement) {
+            const originalText = btnElement.innerText;
+            btnElement.innerText = "KALIBRUJĘ (1s)...";
+            btnElement.disabled = true;
+            btnElement.classList.add("opacity-50");
+            
+            try {
+                await fetch('/api/telemetry/reset', {method: 'POST'});
+            } catch (e) {
+                console.error("Błąd kalibracji", e);
+            }
+            
+            // Czekamy ponad sekundę, żeby tekst wrócił po faktycznym zakończeniu pętli w Pythonie
+            setTimeout(() => { 
+                btnElement.innerText = originalText; 
+                btnElement.disabled = false;
+                btnElement.classList.remove("opacity-50");
+            }, 1200);
         }
 
         async function fetchMotion() {
@@ -324,26 +353,28 @@ HTML_TEMPLATE = """
 
                 const mot = data.motion;
                 if (mot && mot.position_m !== null) {
-                    // Przyspieszenie (Zrekompensowane)
+                    document.getElementById('acc-total').innerText = mot.total_accel_m_s2.toFixed(2);
                     document.getElementById('acc-x').innerText = mot.accel_filtered_m_s2.x;
                     document.getElementById('acc-y').innerText = mot.accel_filtered_m_s2.y;
                     document.getElementById('acc-z').innerText = mot.accel_filtered_m_s2.z;
 
-                    // Prędkość
+                    document.getElementById('vel-total-kmh').innerText = mot.total_velocity_km_h.toFixed(2);
+                    document.getElementById('vel-total-ms').innerText = mot.total_velocity_m_s.toFixed(2) + " m/s";
                     document.getElementById('vel-x').innerText = mot.velocity_m_s.x;
                     document.getElementById('vel-y').innerText = mot.velocity_m_s.y;
                     document.getElementById('vel-z').innerText = mot.velocity_m_s.z;
                     
-                    // Pozycja
+                    document.getElementById('pos-total').innerText = mot.total_position_m.toFixed(2);
                     document.getElementById('pos-x').innerText = mot.position_m.x;
                     document.getElementById('pos-y').innerText = mot.position_m.y;
                     document.getElementById('pos-z').innerText = mot.position_m.z;
                     
-                    document.getElementById('pos-total').innerText = mot.total_position_m.toFixed(2);
+                    document.getElementById('gyr-total').innerText = mot.total_gyro_rad_s.toFixed(2);
+                    document.getElementById('gyr-x').innerText = mot.gyro_rad_s.x;
+                    document.getElementById('gyr-y').innerText = mot.gyro_rad_s.y;
+                    document.getElementById('gyr-z').innerText = mot.gyro_rad_s.z;
                 }
-            } catch (e) {
-                console.error("Brak danych ruchu", e);
-            }
+            } catch (e) { }
         }
 
         async function fetchEnvironment() {
@@ -360,9 +391,7 @@ HTML_TEMPLATE = """
                     document.getElementById('pres').innerText = env.pressure_hpa + ' hPa';
                     document.getElementById('gas').innerText = (env.gas_ohms / 1000).toFixed(1) + ' kΩ';
                 }
-            } catch (e) {
-                console.error("Brak danych środowiskowych", e);
-            }
+            } catch (e) { }
         }
 
         setInterval(fetchMotion, 500);
