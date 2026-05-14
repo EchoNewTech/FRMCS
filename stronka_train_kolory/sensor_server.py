@@ -1,10 +1,10 @@
 import socket
+import math
+import time
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 import board
 import uvicorn
-import time
-import math
 
 # Próba importu bibliotek z obsługą błędów
 try:
@@ -27,7 +27,7 @@ class TelemetrySensors:
             print(f"[SENSORY] Błąd sprzętowy I2C: {e}")
             self.i2c = None
 
-        # --- 1. BME680 (Adres wymuszony na 0x76 na podstawie i2cdetect) ---
+        # --- 1. BME680 (Adres 0x76) ---
         self.bme = None
         if self.i2c and adafruit_bme680:
             try:
@@ -54,22 +54,18 @@ class TelemetrySensors:
             
             # Wzbudzanie kompasu BMM150 z trybu uśpienia
             self.bus.read_byte_data(0x13, 0x40) # Sprawdzenie czy żyje
-            self.bus.write_byte_data(0x13, 0x4B, 0x01) # Power ON (Włącz zasilanie)
+            self.bus.write_byte_data(0x13, 0x4B, 0x01) # Power ON
             time.sleep(0.01)
-            self.bus.write_byte_data(0x13, 0x4C, 0x00) # Tryb normalny (Ciągły pomiar)
+            self.bus.write_byte_data(0x13, 0x4C, 0x00) # Tryb normalny
             
             self.compass_detected = True
             print("[SENSORY] Kompas BMM150 wybudzony i działa (0x13).")
         except Exception as e:
             print(f"[SENSORY] Błąd inicjalizacji kompasu: {e}")
 
-    def get_all_data(self):
-        data = {
-            "environment": {"temperature_c": None, "humidity_percent": None, "pressure_hpa": None, "gas_ohms": None},
-            "motion": {"accel_m_s2": None, "gyro_rad_s": None},
-            "compass": {"detected": self.compass_detected, "heading_deg": None}
-        }
-
+    # Rozdzielamy odczyty na dwie mniejsze funkcje dla lepszej wydajności
+    def get_env_data(self):
+        data = {"environment": {"temperature_c": None, "humidity_percent": None, "pressure_hpa": None, "gas_ohms": None}}
         if self.bme:
             try:
                 data["environment"]["temperature_c"] = round(self.bme.temperature, 2)
@@ -77,43 +73,51 @@ class TelemetrySensors:
                 data["environment"]["pressure_hpa"] = round(self.bme.pressure, 2)
                 data["environment"]["gas_ohms"] = round(self.bme.gas, 2)
             except Exception: pass
+        return data
 
+    def get_motion_data(self):
+        data = {
+            "motion": {"accel_m_s2": None, "total_accel": None, "gyro_rad_s": None},
+            "compass": {"detected": self.compass_detected, "heading_deg": None}
+        }
+        
         if self.lsm:
             try:
                 accel_x, accel_y, accel_z = self.lsm.acceleration
                 gyro_x, gyro_y, gyro_z = self.lsm.gyro
+                
+                # Obliczenie Wypadkowej Przyspieszenia (całkowita siła)
+                total_accel = math.sqrt(accel_x**2 + accel_y**2 + accel_z**2)
+                
                 data["motion"]["accel_m_s2"] = {"x": round(accel_x, 2), "y": round(accel_y, 2), "z": round(accel_z, 2)}
+                data["motion"]["total_accel"] = round(total_accel, 2)
                 data["motion"]["gyro_rad_s"] = {"x": round(gyro_x, 2), "y": round(gyro_y, 2), "z": round(gyro_z, 2)}
             except Exception: pass
 
         if self.compass_detected:
             try:
-                # Odczyt 6 surowych bajtów danych magnetycznych z osi X i Y
                 data_bytes = self.bus.read_i2c_block_data(0x13, 0x42, 6)
-                
-                # BMM150 przesyła dane w specjalnym 13-bitowym formacie. Trzeba je połączyć.
                 x = (data_bytes[1] << 5) | (data_bytes[0] >> 3)
-                if x > 4095: x -= 8192  # Zamiana na wartości ujemne (Two's complement)
-                
+                if x > 4095: x -= 8192
                 y = (data_bytes[3] << 5) | (data_bytes[2] >> 3)
                 if y > 4095: y -= 8192
-
-                # Obliczenie realnego kąta (heading) na podstawie pola magnetycznego
                 heading = math.atan2(y, x) * (180.0 / math.pi)
-                if heading < 0:
-                    heading += 360
-                    
+                if heading < 0: heading += 360
                 data["compass"]["heading_deg"] = int(heading)
-            except Exception: 
-                pass
-
+            except Exception: pass
+            
         return data
+
+    def get_all_data(self):
+        # Funkcja łącząca oba strumienie dla wstecznej kompatybilności z RPi 4
+        return {**self.get_env_data(), **self.get_motion_data()}
+
 
 # === INICJALIZACJA SERWERA ===
 app = FastAPI()
 sensors = TelemetrySensors()
 
-# KOD HTML PANELU DIAGNOSTYCZNEGO (DODANO KOMPAS)
+# KOD HTML PANELU DIAGNOSTYCZNEGO
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -128,11 +132,15 @@ HTML_TEMPLATE = """
         <span class="w-3 h-3 rounded-full bg-green-500 animate-ping"></span>
         Węzeł Sensoryczny (RPi Zero)
     </h1>
-    <p class="text-gray-400 text-sm mb-8">Odświeżanie na żywo co 0.5 sekundy</p>
+    <p class="text-gray-400 text-sm mb-8">Ruch: 0.5s | Środowisko: 1.0s</p>
 
     <div class="w-full max-w-5xl grid grid-cols-1 md:grid-cols-3 gap-6">
         
-        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg col-span-1 md:col-span-2">
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg col-span-1 md:col-span-2 relative">
+            <div class="absolute top-4 right-4 flex items-center gap-2">
+                <span id="env-indicator" class="w-2 h-2 bg-blue-500 rounded-full transition-opacity duration-300"></span>
+                <span class="text-[10px] text-gray-500 uppercase">1 Hz</span>
+            </div>
             <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 pb-2 mb-4">Środowisko (BME680)</h2>
             <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
                 <div class="bg-gray-900 p-3 rounded">
@@ -154,7 +162,11 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
-        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg text-center flex flex-col justify-center items-center">
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg text-center flex flex-col justify-center items-center relative">
+            <div class="absolute top-4 right-4 flex items-center gap-2">
+                <span id="comp-indicator" class="w-2 h-2 bg-red-500 rounded-full transition-opacity duration-300"></span>
+                <span class="text-[10px] text-gray-500 uppercase">2 Hz</span>
+            </div>
             <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 w-full pb-2 mb-4">Kompas v2.0</h2>
             <div id="compass-status" class="text-xs font-bold px-3 py-1 rounded bg-red-900 text-red-400 mb-4 uppercase">Nie wykryto</div>
             
@@ -164,8 +176,7 @@ HTML_TEMPLATE = """
                 <span class="absolute left-1 text-xs font-bold text-gray-500">W</span>
                 <span class="absolute right-1 text-xs font-bold text-gray-500">E</span>
                 
-                <div id="compass-needle" class="absolute w-1 h-16 bg-gradient-to-t from-transparent via-red-500 to-red-600 rounded-full transition-transform duration-300 origin-center" style="transform: rotate(0deg);"></div>
-                
+                <div id="compass-needle" class="absolute w-1 h-16 bg-gradient-to-t from-transparent via-red-500 to-red-600 rounded-full transition-transform duration-100 origin-center" style="transform: rotate(0deg);"></div>
                 <div class="w-3 h-3 bg-white rounded-full z-10"></div>
             </div>
             <div class="mt-4 text-xl font-mono text-yellow-400"><span id="heading-val">--</span>°</div>
@@ -174,17 +185,18 @@ HTML_TEMPLATE = """
         <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg col-span-1 md:col-span-3">
             <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 pb-2 mb-4">Ruch i Wibracje (LSM6DS3)</h2>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div class="bg-gray-900 p-4 rounded text-center">
-                    <span class="text-xs text-gray-500 uppercase block mb-3">Akcelerometr (m/s²)</span>
-                    <div class="flex justify-center gap-8 font-mono text-lg">
+                <div class="bg-gray-900 p-4 rounded text-center border-l-4 border-red-500">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Siła Przyspieszenia (Wypadkowa)</span>
+                    <span id="acc-total" class="text-3xl font-bold font-mono text-white block mb-3">-- <span class="text-sm text-gray-500 font-normal">m/s²</span></span>
+                    <div class="flex justify-center gap-6 font-mono text-sm pt-2 border-t border-gray-700">
                         <span class="text-red-400">X: <span id="acc-x" class="text-white">--</span></span>
                         <span class="text-green-400">Y: <span id="acc-y" class="text-white">--</span></span>
                         <span class="text-blue-400">Z: <span id="acc-z" class="text-white">--</span></span>
                     </div>
                 </div>
-                <div class="bg-gray-900 p-4 rounded text-center">
-                    <span class="text-xs text-gray-500 uppercase block mb-3">Żyroskop (rad/s)</span>
-                    <div class="flex justify-center gap-8 font-mono text-lg">
+                <div class="bg-gray-900 p-4 rounded text-center border-l-4 border-blue-500">
+                    <span class="text-xs text-gray-500 uppercase block mb-3">Żyroskop (Rotacja rad/s)</span>
+                    <div class="flex justify-center items-center h-full pb-6 gap-8 font-mono text-lg">
                         <span class="text-red-400">X: <span id="gyr-x" class="text-white">--</span></span>
                         <span class="text-green-400">Y: <span id="gyr-y" class="text-white">--</span></span>
                         <span class="text-blue-400">Z: <span id="gyr-z" class="text-white">--</span></span>
@@ -195,37 +207,36 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        async function fetchTelemetry() {
-            try {
-                const response = await fetch('/api/telemetry');
-                const data = await response.json();
-                
-                // BME680
-                const env = data.environment;
-                if (env.temperature_c !== null) {
-                    document.getElementById('temp').innerText = env.temperature_c + ' °C';
-                    document.getElementById('hum').innerText = env.humidity_percent + ' %';
-                    document.getElementById('pres').innerText = env.pressure_hpa + ' hPa';
-                    document.getElementById('gas').innerText = (env.gas_ohms / 1000).toFixed(1) + ' kΩ';
-                }
+        // Funkcja mrugania kropkami informującymi o pobraniu danych
+        function flashIndicator(id) {
+            const el = document.getElementById(id);
+            el.style.opacity = '1';
+            setTimeout(() => el.style.opacity = '0.2', 150);
+        }
 
+        // POBIERANIE RUCHU CO 0.5 SEKUNDY (Kompas + Akcelerometr)
+        async function fetchMotion() {
+            try {
+                const response = await fetch('/api/telemetry/motion');
+                const data = await response.json();
+                flashIndicator('comp-indicator');
+                
                 // Kompas
                 const comp = data.compass;
                 const compStatus = document.getElementById('compass-status');
                 if (comp.detected) {
                     compStatus.innerText = "Aktywny (I2C: 0x13)";
                     compStatus.className = "text-xs font-bold px-3 py-1 rounded bg-green-900 text-green-400 mb-4 uppercase";
-                    
                     if (comp.heading_deg !== null) {
                         document.getElementById('heading-val').innerText = comp.heading_deg;
-                        // Obracanie strzałki w CSS
                         document.getElementById('compass-needle').style.transform = `rotate(${comp.heading_deg}deg)`;
                     }
                 }
 
-                // LSM6DS3
+                // Akcelerometr i Żyroskop
                 const mot = data.motion;
                 if (mot.accel_m_s2 !== null) {
+                    document.getElementById('acc-total').innerText = mot.total_accel.toFixed(2);
                     document.getElementById('acc-x').innerText = mot.accel_m_s2.x;
                     document.getElementById('acc-y').innerText = mot.accel_m_s2.y;
                     document.getElementById('acc-z').innerText = mot.accel_m_s2.z;
@@ -234,26 +245,60 @@ HTML_TEMPLATE = """
                     document.getElementById('gyr-y').innerText = mot.gyro_rad_s.y;
                     document.getElementById('gyr-z').innerText = mot.gyro_rad_s.z;
                 }
-            } catch (error) {
-                console.error("Błąd pobierania danych:", error);
-            }
+            } catch (e) {}
         }
 
-        // Odświeżanie 2 razy na sekundę dla płynniejszego działania żyroskopu i kompasu
-        setInterval(fetchTelemetry, 500);
-        fetchTelemetry();
+        // POBIERANIE ŚRODOWISKA CO 1.0 SEKUNDĘ (BME680)
+        async function fetchEnvironment() {
+            try {
+                const response = await fetch('/api/telemetry/env');
+                const data = await response.json();
+                flashIndicator('env-indicator');
+                
+                const env = data.environment;
+                if (env.temperature_c !== null) {
+                    document.getElementById('temp').innerText = env.temperature_c + ' °C';
+                    document.getElementById('hum').innerText = env.humidity_percent + ' %';
+                    document.getElementById('pres').innerText = env.pressure_hpa + ' hPa';
+                    document.getElementById('gas').innerText = (env.gas_ohms / 1000).toFixed(1) + ' kΩ';
+                }
+            } catch (e) {}
+        }
+
+        // Ustawienie niezależnych pętli czasowych
+        setInterval(fetchMotion, 500);       // Ruch co 500ms
+        setInterval(fetchEnvironment, 1000); // Środowisko co 1000ms
+        
+        // Pierwsze pobranie od razu
+        fetchMotion();
+        fetchEnvironment();
     </script>
 </body>
 </html>
 """
 
+# --- GŁÓWNE ENDPOINTY API ---
+
 @app.get("/", response_class=HTMLResponse)
 def index():
+    """Zwraca stronę HTML Panelu Diagnostycznego"""
     return HTML_TEMPLATE
 
 @app.get("/api/telemetry")
 def get_telemetry():
+    """Pełen zrzut danych (Dla pociągów RPi 4)"""
     return sensors.get_all_data()
+
+@app.get("/api/telemetry/env")
+def get_telemetry_env():
+    """Tylko dane środowiskowe (Dla skryptu JS - 1s)"""
+    return sensors.get_env_data()
+
+@app.get("/api/telemetry/motion")
+def get_telemetry_motion():
+    """Tylko dane o ruchu (Dla skryptu JS - 0.5s)"""
+    return sensors.get_motion_data()
+
 
 def get_local_ip():
     try:
