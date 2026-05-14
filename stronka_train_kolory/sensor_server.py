@@ -1,8 +1,7 @@
-# Plik: sensor_server.py (NA RASPBERRY PI ZERO)
-from socket import socket
-import time
-import board
+import socket
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+import board
 import uvicorn
 
 # Próba importu bibliotek z obsługą błędów, 
@@ -95,6 +94,113 @@ class TelemetrySensors:
 app = FastAPI()
 sensors = TelemetrySensors()
 
+# KOD HTML PANELU DIAGNOSTYCZNEGO
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RPi Zero - Czujniki</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white p-6 md:p-10 flex flex-col items-center min-h-screen">
+    <h1 class="text-3xl font-bold text-green-500 mb-2 text-center flex items-center gap-3">
+        <span class="w-3 h-3 rounded-full bg-green-500 animate-ping"></span>
+        Węzeł Sensoryczny (RPi Zero)
+    </h1>
+    <p class="text-gray-400 text-sm mb-8">Odświeżanie na żywo co 1 sekundę</p>
+
+    <div class="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-6">
+        
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+            <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 pb-2 mb-4">Środowisko (BME680)</h2>
+            <div class="grid grid-cols-2 gap-4 text-center">
+                <div class="bg-gray-900 p-3 rounded">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Temperatura</span>
+                    <span id="temp" class="text-2xl font-mono text-orange-400">-- °C</span>
+                </div>
+                <div class="bg-gray-900 p-3 rounded">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Wilgotność</span>
+                    <span id="hum" class="text-2xl font-mono text-blue-400">-- %</span>
+                </div>
+                <div class="bg-gray-900 p-3 rounded">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Ciśnienie</span>
+                    <span id="pres" class="text-2xl font-mono text-teal-400">-- hPa</span>
+                </div>
+                <div class="bg-gray-900 p-3 rounded">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Gaz (kΩ)</span>
+                    <span id="gas" class="text-2xl font-mono text-purple-400">-- kΩ</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-gray-800 p-6 rounded-xl border border-gray-700 shadow-lg">
+            <h2 class="text-xl font-bold text-gray-300 border-b border-gray-600 pb-2 mb-4">Ruch (LSM6DS3)</h2>
+            <div class="space-y-4">
+                <div class="bg-gray-900 p-3 rounded">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Akcelerometr (m/s²)</span>
+                    <div class="flex justify-between font-mono text-sm">
+                        <span class="text-red-400">X: <span id="acc-x" class="text-white">--</span></span>
+                        <span class="text-green-400">Y: <span id="acc-y" class="text-white">--</span></span>
+                        <span class="text-blue-400">Z: <span id="acc-z" class="text-white">--</span></span>
+                    </div>
+                </div>
+                <div class="bg-gray-900 p-3 rounded">
+                    <span class="text-xs text-gray-500 uppercase block mb-1">Żyroskop (rad/s)</span>
+                    <div class="flex justify-between font-mono text-sm">
+                        <span class="text-red-400">X: <span id="gyr-x" class="text-white">--</span></span>
+                        <span class="text-green-400">Y: <span id="gyr-y" class="text-white">--</span></span>
+                        <span class="text-blue-400">Z: <span id="gyr-z" class="text-white">--</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function fetchTelemetry() {
+            try {
+                const response = await fetch('/api/telemetry');
+                const data = await response.json();
+                
+                const env = data.environment;
+                if (env.temperature_c !== null) {
+                    document.getElementById('temp').innerText = env.temperature_c + ' °C';
+                    document.getElementById('hum').innerText = env.humidity_percent + ' %';
+                    document.getElementById('pres').innerText = env.pressure_hpa + ' hPa';
+                    document.getElementById('gas').innerText = (env.gas_ohms / 1000).toFixed(1) + ' kΩ';
+                }
+
+                const mot = data.motion;
+                if (mot.accel_m_s2 !== null) {
+                    document.getElementById('acc-x').innerText = mot.accel_m_s2.x;
+                    document.getElementById('acc-y').innerText = mot.accel_m_s2.y;
+                    document.getElementById('acc-z').innerText = mot.accel_m_s2.z;
+                    
+                    document.getElementById('gyr-x').innerText = mot.gyro_rad_s.x;
+                    document.getElementById('gyr-y').innerText = mot.gyro_rad_s.y;
+                    document.getElementById('gyr-z').innerText = mot.gyro_rad_s.z;
+                }
+            } catch (error) {
+                console.error("Błąd pobierania danych:", error);
+            }
+        }
+
+        // Odświeżaj dane co 1000 milisekund (1 sekunda)
+        setInterval(fetchTelemetry, 1000);
+        fetchTelemetry(); // Pierwsze wywołanie od razu
+    </script>
+</body>
+</html>
+"""
+
+# Zwracanie interfejsu graficznego w przeglądarce
+@app.get("/", response_class=HTMLResponse)
+def index():
+    return HTML_TEMPLATE
+
+# Główne API zwracające dane dla Raspberry Pi 4 (lub skryptu JS wyżej)
 @app.get("/api/telemetry")
 def get_telemetry():
     """Zwraca aktualne odczyty z czujników I2C jako JSON"""
@@ -111,9 +217,9 @@ def get_local_ip():
         return "127.0.0.1"
 
 if __name__ == "__main__":
-    print("Uruchamiam serwer czujników na porcie 8002...")
     local_ip = get_local_ip()
     print("\n" + "="*55)
-    print(f" Otwórz panel sterowania: http://{local_ip}:8002")
+    print(" Uruchamiam serwer czujników na porcie 8002...")
+    print(f" Otwórz panel diagnostyczny: http://{local_ip}:8002")
     print("="*55 + "\n")
     uvicorn.run(app, host="0.0.0.0", port=8002, access_log=False)
