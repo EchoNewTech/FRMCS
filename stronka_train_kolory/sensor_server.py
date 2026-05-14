@@ -6,7 +6,6 @@ from fastapi.responses import HTMLResponse
 import board
 import uvicorn
 
-# Próba importu bibliotek z obsługą błędów
 try:
     import adafruit_bme680
 except ImportError:
@@ -17,7 +16,6 @@ try:
 except ImportError:
     LSM6DS3 = None
 
-
 class TelemetrySensors:
     def __init__(self):
         print("[SENSORY] Inicjalizacja magistrali I2C...")
@@ -27,43 +25,38 @@ class TelemetrySensors:
             print(f"[SENSORY] Błąd sprzętowy I2C: {e}")
             self.i2c = None
 
-        # --- 1. BME680 (Adres 0x76) ---
+        # --- BME680 ---
         self.bme = None
         if self.i2c and adafruit_bme680:
             try:
                 self.bme = adafruit_bme680.Adafruit_BME680_I2C(self.i2c, address=0x76)
                 self.bme.sea_level_pressure = 1013.25 
-                print("[SENSORY] BME680 podłączony poprawnie (0x76).")
-            except Exception as e:
-                print(f"[SENSORY] Nie znaleziono BME680 na I2C (0x76): {e}")
+            except Exception: pass
 
-        # --- 2. LSM6DS3 (Akcelerometr, Żyroskop) ---
+        # --- LSM6DS3 ---
         self.lsm = None
         if self.i2c and LSM6DS3:
             try:
                 self.lsm = LSM6DS3(self.i2c)
-                print("[SENSORY] LSM6DS3 podłączony poprawnie (0x6a).")
-            except Exception as e:
-                print(f"[SENSORY] Nie znaleziono LSM6DS3 na I2C: {e}")
+            except Exception: pass
 
-        # --- 3. Kompas Grove 3-Axis v2.0 (BMM150) ---
+        # --- KOMPAS BMM150 ---
         self.compass_detected = False
         try:
             import smbus2
             self.bus = smbus2.SMBus(1)
-            
-            # Wzbudzanie kompasu BMM150 z trybu uśpienia
-            self.bus.read_byte_data(0x13, 0x40) # Sprawdzenie czy żyje
-            self.bus.write_byte_data(0x13, 0x4B, 0x01) # Power ON
+            self.bus.read_byte_data(0x13, 0x40) 
+            self.bus.write_byte_data(0x13, 0x4B, 0x01) 
             time.sleep(0.01)
-            self.bus.write_byte_data(0x13, 0x4C, 0x00) # Tryb normalny
-            
+            self.bus.write_byte_data(0x13, 0x4C, 0x00) 
             self.compass_detected = True
-            print("[SENSORY] Kompas BMM150 wybudzony i działa (0x13).")
-        except Exception as e:
-            print(f"[SENSORY] Błąd inicjalizacji kompasu: {e}")
+        except Exception: pass
 
-    # Rozdzielamy odczyty na dwie mniejsze funkcje dla lepszej wydajności
+        # --- Zmienne do nawigacji inercyjnej (Całkowanie) ---
+        self.last_time = time.time()
+        self.velocity = [0.0, 0.0, 0.0] # Prędkość w m/s
+        self.position = [0.0, 0.0, 0.0] # Pozycja (dystans) w metrach
+
     def get_env_data(self):
         data = {"environment": {"temperature_c": None, "humidity_percent": None, "pressure_hpa": None, "gas_ohms": None}}
         if self.bme:
@@ -77,21 +70,53 @@ class TelemetrySensors:
 
     def get_motion_data(self):
         data = {
-            "motion": {"accel_m_s2": None, "total_accel": None, "gyro_rad_s": None},
+            "motion": {
+                "velocity_m_s": None, 
+                "position_m": None, 
+                "total_position_m": None,
+                "gyro_rad_s": None
+            },
             "compass": {"detected": self.compass_detected, "heading_deg": None}
         }
         
+        current_time = time.time()
+        dt = current_time - self.last_time
+        self.last_time = current_time
+
         if self.lsm:
             try:
-                accel_x, accel_y, accel_z = self.lsm.acceleration
-                gyro_x, gyro_y, gyro_z = self.lsm.gyro
+                ax, ay, az = self.lsm.acceleration
+                gx, gy, gz = self.lsm.gyro
                 
-                # Obliczenie Wypadkowej Przyspieszenia (całkowita siła)
-                total_accel = math.sqrt(accel_x**2 + accel_y**2 + accel_z**2)
+                # Filtracja i usuwanie grawitacji Ziemi (założenie: czujnik leży płasko)
+                az_comp = az - 9.81
                 
-                data["motion"]["accel_m_s2"] = {"x": round(accel_x, 2), "y": round(accel_y, 2), "z": round(accel_z, 2)}
-                data["motion"]["total_accel"] = round(total_accel, 2)
-                data["motion"]["gyro_rad_s"] = {"x": round(gyro_x, 2), "y": round(gyro_y, 2), "z": round(gyro_z, 2)}
+                # Deadband (Ignorujemy mikroszumy, aby pociąg nie "jechał" w miejscu)
+                deadband = 0.15
+                if abs(ax) < deadband: ax = 0.0
+                if abs(ay) < deadband: ay = 0.0
+                if abs(az_comp) < deadband: az_comp = 0.0
+
+                # 1. Całkowanie do PRĘDKOŚCI (v = v0 + a * dt)
+                self.velocity[0] += ax * dt
+                self.velocity[1] += ay * dt
+                self.velocity[2] += az_comp * dt
+
+                # Tłumik prędkości (Sztuczne hamowanie, zapobiega ucieczce w nieskończoność)
+                self.velocity = [v * 0.98 for v in self.velocity]
+
+                # 2. Całkowanie do POZYCJI (p = p0 + v * dt)
+                self.position[0] += self.velocity[0] * dt
+                self.position[1] += self.velocity[1] * dt
+                self.position[2] += self.velocity[2] * dt
+
+                # Obliczenie WYPADKOWEJ POZYCJI (Pitagoras przestrzenny)
+                total_pos = math.sqrt(self.position[0]**2 + self.position[1]**2 + self.position[2]**2)
+                
+                data["motion"]["velocity_m_s"] = {"x": round(self.velocity[0], 2), "y": round(self.velocity[1], 2), "z": round(self.velocity[2], 2)}
+                data["motion"]["position_m"] = {"x": round(self.position[0], 2), "y": round(self.position[1], 2), "z": round(self.position[2], 2)}
+                data["motion"]["total_position_m"] = round(total_pos, 2)
+                data["motion"]["gyro_rad_s"] = {"x": round(gx, 2), "y": round(gy, 2), "z": round(gz, 2)}
             except Exception: pass
 
         if self.compass_detected:
