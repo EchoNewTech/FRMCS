@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+    <meta charset="UTF-8">
+    <title>FRMCS Panel Widescreen</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+
+<body class="bg-gray-950 text-white p-4 md:p-8 flex flex-col items-center min-h-screen">
+
+    <div class="w-full max-w-[98%] 2xl:max-w-[1600px] flex flex-col gap-6">
+
+        <h1 class="text-3xl font-black tracking-widest text-blue-500 mb-2 border-b border-gray-800 pb-4 uppercase">
+            System Sterowania FRMCS <span class="text-sm font-mono text-gray-500 ml-4">// Dyspozytornia Główna</span>
+        </h1>
+
+        <div class="bg-gray-900 p-4 rounded-xl border border-gray-800 shadow-xl">
+            <h3 class="text-gray-500 text-xs font-bold mb-4 uppercase tracking-widest flex items-center gap-2">
+                <div class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div> Blokada Liniowa (Strefy)
+            </h3>
+            <div id="zones-container" class="flex flex-col md:flex-row gap-4 w-full">
+                <p class="text-center w-full text-gray-600 font-mono animate-pulse">Inicjalizacja makiety...</p>
+            </div>
+        </div>
+
+        <div id="trains-container" class="flex flex-col gap-6 w-full"></div>
+
+        <div class="bg-black/50 p-4 rounded-xl border border-gray-800 shadow-inner">
+            <h3 class="text-gray-600 text-xs font-bold mb-3 uppercase tracking-widest flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span> Dziennik Zdarzeń
+            </h3>
+            <ul id="system-logs"
+                class="text-xs font-mono text-blue-400/80 space-y-1 h-32 overflow-y-auto pl-2 border-l border-gray-800">
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        let sysConfig = null;
+
+        const twColors = {
+            blue: { text: 'text-blue-500', bg: 'bg-blue-600', hover: 'bg-blue-900', border: 'border-blue-600/30', zoneBg: 'bg-blue-900/20' },
+            green: { text: 'text-green-500', bg: 'bg-green-600', hover: 'bg-green-900', border: 'border-green-600/30', zoneBg: 'bg-green-900/20' },
+            yellow: { text: 'text-yellow-500', bg: 'bg-yellow-600', hover: 'bg-yellow-900', border: 'border-yellow-600/30', zoneBg: 'bg-yellow-900/20' },
+            slate: { text: 'text-slate-300', bg: 'bg-slate-600', hover: 'bg-slate-800', border: 'border-slate-500/30', zoneBg: 'bg-slate-800/50' },
+            red: { text: 'text-red-500', bg: 'bg-red-600', hover: 'bg-red-900' },
+            orange: { text: 'text-orange-500', bg: 'bg-orange-600', hover: 'bg-orange-900' },
+            gray: { text: 'text-gray-500', bg: 'bg-gray-600', hover: 'bg-gray-800' }
+        };
+
+        async function initSystem() {
+            try {
+                const res = await fetch('/api/config');
+                sysConfig = await res.json();
+
+                renderTrains();
+                renderZones();
+
+                setInterval(updateStatus, 500);
+                setInterval(fetchRaspData, 1000);
+            } catch (e) {
+                console.error("Czekam na uruchomienie serwera Python...", e);
+                setTimeout(initSystem, 2000);
+            }
+        }
+
+        function renderZones() {
+            const container = document.getElementById('zones-container');
+            const zones = Object.values(sysConfig.colors)
+                .filter(c => c.role === 'zone')
+                .sort((a, b) => a.zone_id - b.zone_id);
+
+            container.innerHTML = zones.map(c => {
+                const th = twColors[c.ui_color] || twColors.gray;
+                return `
+                <div id="ui-zone-${c.zone_id}" class="flex-1 border-2 ${th.border} ${th.zoneBg} bg-gray-900/50 rounded-lg p-4 text-center transition-all duration-300">
+                    <div class="${th.text} font-black tracking-widest mb-2">STREFA ${c.zone_id} <span class="text-[10px] opacity-60 ml-1">(${c.label})</span></div>
+                    <div id="occupant-${c.zone_id}" class="text-gray-500 text-sm font-mono bg-black/40 py-2 rounded border border-gray-800 shadow-inner">WOLNA</div>
+                </div>`;
+            }).join('');
+        }
+
+        function renderTrains() {
+            const container = document.getElementById('trains-container');
+            const sortedColors = Object.entries(sysConfig.colors).sort((a, b) => {
+                const orderA = a[1].order !== undefined ? a[1].order : 99;
+                const orderB = b[1].order !== undefined ? b[1].order : 99;
+                return orderA - orderB;
+            });
+
+            const devButtonsHtml = sortedColors.map(([code, c]) => {
+                const th = twColors[c.ui_color] || twColors.gray;
+                const label = c.role === 'zone' ? `Z${c.zone_id}` : c.label.substring(0, 4);
+                return `<button onclick="control('{TID}', 'simulate', '${code}')" class="flex-1 bg-gray-800 hover:${th.hover} border ${th.border} ${th.text} h-6 rounded text-[9px] font-bold transition-colors" title="${c.label}">${label}</button>`;
+            }).join('');
+
+            container.innerHTML = Object.entries(sysConfig.trains).map(([id, t]) => {
+                const macSuffix = t.mac ? t.mac.slice(-5) : "Brak MAC";
+                const streamSrc = t.rasp_url ? `${t.rasp_url}/video?t=${Date.now()}` : "";
+
+                return `
+                <div class="bg-gray-800 p-5 rounded-xl border border-gray-700 shadow-2xl flex flex-col xl:flex-row gap-6 w-full items-stretch">
+                    
+                    <div class="flex flex-col w-full xl:w-1/4 gap-4">
+                        <div class="flex justify-between items-center bg-gray-900 p-4 rounded-lg border border-gray-700 shadow-inner">
+                            <h2 class="text-2xl font-black tracking-wider">${t.name} <span class="text-xs text-gray-500 font-mono block xl:inline">(${macSuffix})</span></h2>
+                            <span id="status-${id}" class="text-xs font-bold text-red-500 uppercase tracking-widest px-2 py-1 bg-red-900/20 rounded border border-red-900">ROZŁĄCZONY</span>
+                        </div>
+                        
+                        <div class="flex gap-2">
+                            <button onclick="control('${id}', 'connect')" class="flex-1 bg-blue-900/40 text-blue-400 py-3 rounded text-sm font-bold hover:bg-blue-800/60 shadow border border-blue-800 transition-colors">POŁĄCZ</button>
+                            <button onclick="control('${id}', 'disconnect')" class="flex-1 bg-gray-900 text-gray-400 py-3 rounded text-sm font-bold hover:bg-gray-700 shadow border border-gray-700 transition-colors">ROZŁĄCZ</button>
+                        </div>
+
+                        <div class="flex flex-col gap-2 bg-black/40 p-4 rounded-lg border border-gray-700">
+                            <span class="text-gray-500 text-[10px] font-bold uppercase tracking-widest block border-b border-gray-800 pb-1 mb-1">Optyczny skaner toru</span>
+                            <div class="flex justify-between items-center">
+                                <div class="text-[11px] font-mono flex gap-3">
+                                    <span class="text-red-500">R:<span id="r-${id}" class="text-gray-300 ml-1">0</span></span>
+                                    <span class="text-green-500">G:<span id="g-${id}" class="text-gray-300 ml-1">0</span></span>
+                                    <span class="text-blue-500">B:<span id="b-${id}" class="text-gray-300 ml-1">0</span></span>
+                                </div>
+                                <span id="color-${id}" class="text-[11px] font-bold text-gray-500 tracking-widest px-2 py-0.5 rounded bg-gray-900 border border-gray-800">CZEKAM</span>
+                            </div>
+                        </div>
+
+                        <div id="dev-tools-${id}" class="mt-auto hidden">
+                            <div class="bg-gray-900/60 p-3 rounded-lg border border-gray-700/50 border-dashed">
+                                <span class="text-[9px] text-gray-500 uppercase tracking-widest block mb-2 text-center">Panel Symulacji (DEV)</span>
+                                <div class="flex space-x-1">
+                                    ${devButtonsHtml.replace(/{TID}/g, id)}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="flex flex-col w-full xl:w-1/4 gap-4">
+                        <div class="text-center bg-black p-4 rounded-lg border border-gray-700 flex-1 flex flex-col justify-center items-center shadow-inner relative overflow-hidden">
+                            <div class="absolute inset-0 bg-[linear-gradient(rgba(0,255,0,0.03)_1px,transparent_1px)] bg-[size:100%_4px] pointer-events-none"></div>
+                            <span class="text-gray-500 font-bold uppercase text-[10px] tracking-widest z-10">Prędkość Zadana</span>
+                            <span id="speed-${id}" class="text-6xl font-mono font-bold text-green-500 block mt-2 z-10 drop-shadow-[0_0_8px_rgba(0,255,0,0.5)]">0%</span>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <button onclick="control('${id}', 'move', 'up')" class="bg-gray-800 text-green-500 border border-green-900 py-4 rounded-lg font-bold tracking-wider hover:bg-gray-700 hover:text-green-400 shadow-sm text-sm transition-all">PRZYSPIESZ (+)</button>
+                            <button onclick="control('${id}', 'move', 'down')" class="bg-gray-800 text-yellow-500 border border-yellow-900 py-4 rounded-lg font-bold tracking-wider hover:bg-gray-700 hover:text-yellow-400 shadow-sm text-sm transition-all">ZWOLNIJ (-)</button>
+                        </div>
+                        <button onclick="control('${id}', 'stop')" class="w-full bg-gray-800 text-red-500 border border-red-900 py-3 rounded-lg font-black hover:bg-red-900/40 hover:text-red-400 shadow-sm text-xl tracking-[0.2em] transition-all">STOP</button>
+                    </div>
+
+                    <div class="flex flex-col xl:flex-row w-full xl:w-2/4 bg-gray-900 rounded-lg border border-gray-700 overflow-hidden shadow-inner">
+                        
+                        <div class="relative w-full xl:w-7/12 bg-black flex items-center justify-center min-h-[220px]">
+                            <span class="text-gray-600 text-xs font-mono text-center px-4 absolute z-0" id="cam-placeholder-${id}">
+                                Oczekiwanie na wideo...<br>
+                                <span class="text-[9px] opacity-50 block mt-2">${t.rasp_url || 'Brak strumienia'}</span>
+                            </span>
+                            <img src="${streamSrc}" class="${streamSrc ? 'absolute' : 'hidden'} inset-0 w-full h-full object-cover z-10 bg-black/50" alt="">
+                            <div class="absolute top-2 left-2 z-20 bg-black/80 px-2 py-1 rounded text-[9px] font-mono text-green-400 border border-green-500/30 tracking-widest flex items-center gap-2">
+                                <div class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div> FPV // LIVE
+                            </div>
+                        </div>
+                        
+                        <div class="w-full xl:w-5/12 flex flex-col border-t xl:border-t-0 xl:border-l border-gray-800 bg-gray-900/80 p-3 gap-3">
+                            
+                            <div>
+                                <h4 class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1 border-b border-gray-800 pb-1">
+                                    <svg class="w-3 h-3 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
+                                    Atmosfera
+                                </h4>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div class="bg-black/40 p-2 rounded border border-gray-800/50 flex flex-col items-center justify-center">
+                                        <span class="text-[8px] text-gray-500 uppercase">Temperatura</span>
+                                        <div class="text-orange-400 font-mono"><span id="${id}-temp" class="text-lg font-bold">--</span><span class="text-xs text-gray-500 ml-0.5">°C</span></div>
+                                    </div>
+                                    <div class="bg-black/40 p-2 rounded border border-gray-800/50 flex flex-col items-center justify-center">
+                                        <span class="text-[8px] text-gray-500 uppercase">Wilgotność</span>
+                                        <div class="text-blue-400 font-mono"><span id="${id}-hum" class="text-lg font-bold">--</span><span class="text-xs text-gray-500 ml-0.5">%</span></div>
+                                    </div>
+                                    <div class="bg-black/40 p-2 rounded border border-gray-800/50 flex flex-col items-center justify-center">
+                                        <span class="text-[8px] text-gray-500 uppercase">Ciśnienie</span>
+                                        <div class="text-teal-400 font-mono"><span id="${id}-pres" class="text-lg font-bold">--</span><span class="text-xs text-gray-500 ml-0.5">hPa</span></div>
+                                    </div>
+                                    <div class="bg-black/40 p-2 rounded border border-gray-800/50 flex flex-col items-center justify-center">
+                                        <span class="text-[8px] text-gray-500 uppercase">Gaz</span>
+                                        <div class="text-purple-400 font-mono"><span id="${id}-gas" class="text-lg font-bold">--</span><span class="text-xs text-gray-500 ml-0.5">kΩ</span></div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="flex-1 flex flex-col">
+                                <h4 class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1 border-b border-gray-800 pb-1">
+                                    <svg class="w-3 h-3 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+                                    Nawigacja Inercyjna
+                                </h4>
+                                <div class="flex items-center justify-between bg-black/40 p-2 rounded border border-gray-800/50 flex-1">
+                                    
+                                    <div class="grid grid-cols-2 gap-x-2 gap-y-1 w-full pr-2">
+                                        <div class="flex flex-col">
+                                            <span class="text-[7px] text-gray-500 uppercase">Wibracje</span>
+                                            <div class="text-green-500 font-mono"><span id="${id}-accel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m/s²</span></div>
+                                        </div>
+                                        <div class="flex flex-col">
+                                            <span class="text-[7px] text-gray-500 uppercase">Prędkość</span>
+                                            <div class="text-blue-500 font-mono"><span id="${id}-vel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">km/h</span></div>
+                                        </div>
+                                        <div class="flex flex-col">
+                                            <span class="text-[7px] text-gray-500 uppercase">Dystans</span>
+                                            <div class="text-purple-500 font-mono"><span id="${id}-dist" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m</span></div>
+                                        </div>
+                                        <div class="flex flex-col">
+                                            <span class="text-[7px] text-gray-500 uppercase">Rotacja</span>
+                                            <div class="text-teal-500 font-mono"><span id="${id}-gyr" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">rad/s</span></div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="flex flex-col items-center justify-center">
+                                        <div class="relative w-14 h-14 rounded-full border border-gray-700 bg-black shadow-[inset_0_0_10px_rgba(0,0,0,0.8)]">
+                                            <div class="absolute inset-0 flex items-center justify-center text-[7px] text-gray-600 font-bold">
+                                                <span class="absolute top-0.5 text-red-900/80">N</span>
+                                                <span class="absolute bottom-0.5">S</span>
+                                                <span class="absolute left-0.5">W</span>
+                                                <span class="absolute right-0.5">E</span>
+                                            </div>
+                                            <div id="compass-needle-${id}" class="absolute inset-0 flex items-center justify-center transition-transform duration-500 ease-out">
+                                                <div class="w-0.5 h-7 bg-gradient-to-t from-transparent via-red-600 to-red-500 rounded-full shadow-[0_0_5px_red]"></div>
+                                            </div>
+                                            <div class="absolute inset-0 flex items-center justify-center">
+                                                <div class="w-1.5 h-1.5 bg-gray-400 rounded-full shadow-sm"></div>
+                                            </div>
+                                        </div>
+                                        <div class="text-yellow-500 font-mono mt-1"><span id="${id}-heading" class="text-xs font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">°</span></div>
+                                    </div>
+
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+                </div>
+            `}).join('');
+        }
+
+        async function fetchRaspData() {
+            if (!sysConfig || !sysConfig.trains) return;
+
+            for (const [id, t] of Object.entries(sysConfig.trains)) {
+                if (!t.rasp_url) continue;
+
+                try {
+                    const [resEnv, resMotion] = await Promise.all([
+                        fetch(`${t.rasp_url}/api/telemetry/env`).catch(() => null),
+                        fetch(`${t.rasp_url}/api/telemetry/motion`).catch(() => null)
+                    ]);
+
+                    if (resEnv && resEnv.ok) {
+                        const env = await resEnv.json();
+                        if (env.environment.temperature_c !== null) {
+                            document.getElementById(`${id}-temp`).innerText = env.environment.temperature_c;
+                            document.getElementById(`${id}-hum`).innerText = env.environment.humidity_percent;
+                            document.getElementById(`${id}-pres`).innerText = Math.round(env.environment.pressure_hpa);
+                            document.getElementById(`${id}-gas`).innerText = (env.environment.gas_ohms / 1000).toFixed(1);
+                        }
+                    }
+
+                    if (resMotion && resMotion.ok) {
+                        const motion = await resMotion.json();
+                        if (motion.motion.total_accel_m_s2 !== null) {
+                            document.getElementById(`${id}-accel`).innerText = motion.motion.total_accel_m_s2.toFixed(2);
+
+                            // NOWE DANE (Sprawdzamy czy elementy istnieją w DOM)
+                            if (document.getElementById(`${id}-vel`)) {
+                                document.getElementById(`${id}-vel`).innerText = motion.motion.total_velocity_km_h.toFixed(2);
+                                document.getElementById(`${id}-dist`).innerText = motion.motion.total_position_m.toFixed(2);
+                                document.getElementById(`${id}-gyr`).innerText = motion.motion.total_gyro_rad_s.toFixed(2);
+                            }
+                        }
+                        if (motion.compass.detected && motion.compass.heading_deg !== null) {
+                            document.getElementById(`${id}-heading`).innerText = motion.compass.heading_deg;
+
+                            // Aktualizacja igły kompasu
+                            const needle = document.getElementById(`compass-needle-${id}`);
+                            if (needle) needle.style.transform = `rotate(${motion.compass.heading_deg}deg)`;
+                        }
+                    }
+                } catch (e) { }
+            }
+        }
+
+        async function control(id, action, param = '') {
+            const res = await fetch(`/api/${action}/${id}${param ? '/' + param : ''}`, { method: 'POST' });
+            if (res.status === 412) {
+                alert("⚠️ Akcja niemożliwa: Najpierw połącz się z pociągiem!");
+            }
+        }
+
+        async function updateStatus() {
+            try {
+                const res = await fetch('/api/status');
+                if (!res.ok) return;
+                const data = await res.json();
+
+                if (data.logs.length > 0) {
+                    document.getElementById('system-logs').innerHTML = data.logs.map(l => `<li>> ${l}</li>`).join('');
+                }
+
+                for (const [id, tData] of Object.entries(data.trains)) {
+                    document.getElementById(`speed-${id}`).innerText = tData.speed + '%';
+
+                    if (tData.rgb) {
+                        document.getElementById(`r-${id}`).innerText = tData.rgb.r;
+                        document.getElementById(`g-${id}`).innerText = tData.rgb.g;
+                        document.getElementById(`b-${id}`).innerText = tData.rgb.b;
+                    }
+
+                    const colorEl = document.getElementById(`color-${id}`);
+                    colorEl.innerText = tData.color_text;
+                    const th = twColors[tData.ui_color] || twColors.gray;
+                    colorEl.className = `text-[11px] font-bold tracking-widest px-2 py-0.5 rounded bg-gray-900 border border-gray-800 ${th.text}`;
+
+                    const statusEl = document.getElementById(`status-${id}`);
+                    const devTools = document.getElementById(`dev-tools-${id}`);
+
+                    if (tData.connection === 'bt') {
+                        statusEl.innerText = 'POŁĄCZONO (BT)';
+                        statusEl.className = 'text-xs font-bold text-green-400 uppercase tracking-widest px-2 py-1 bg-green-900/20 rounded border border-green-900/50';
+                        devTools.classList.add('hidden');
+                    } else if (tData.connection === 'virtual') {
+                        statusEl.innerText = 'WIRTUALNY (DEV)';
+                        statusEl.className = 'text-xs font-bold text-yellow-500 uppercase tracking-widest px-2 py-1 bg-yellow-900/20 rounded border border-yellow-900/50 animate-pulse';
+                        devTools.classList.remove('hidden');
+                    } else {
+                        statusEl.innerText = 'ROZŁĄCZONY';
+                        statusEl.className = 'text-xs font-bold text-red-500 uppercase tracking-widest px-2 py-1 bg-red-900/20 rounded border border-red-900/50';
+                        devTools.classList.add('hidden');
+                    }
+                }
+
+                for (const [z_id, occupant] of Object.entries(data.zones)) {
+                    const zoneDiv = document.getElementById(`ui-zone-${z_id}`);
+                    const occupantDiv = document.getElementById(`occupant-${z_id}`);
+                    if (!zoneDiv) continue;
+
+                    if (occupant) {
+                        occupantDiv.innerText = occupant;
+                        occupantDiv.className = "text-white text-sm font-bold tracking-widest bg-red-600/90 py-2 rounded shadow-lg border border-red-500";
+                        zoneDiv.classList.add("border-red-500", "bg-red-900/20");
+                        zoneDiv.classList.remove("border-gray-800", "bg-gray-900/50");
+                    } else {
+                        occupantDiv.innerText = "WOLNA";
+                        occupantDiv.className = "text-gray-500 text-sm font-mono bg-black/40 py-2 rounded border border-gray-800 shadow-inner";
+                        zoneDiv.classList.remove("border-red-500", "bg-red-900/20");
+                        zoneDiv.classList.add("border-gray-800", "bg-gray-900/50");
+                    }
+                }
+            } catch (e) { }
+        }
+
+        initSystem();
+    </script>
+</body>
+
+</html>
