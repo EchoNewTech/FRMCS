@@ -5,6 +5,54 @@
     <meta charset="UTF-8">
     <title>FRMCS Panel Widescreen</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Szczotkowany metal / Ciemny plastik kokpitowy */
+        .brushed-metal-bg {
+            background-color: #2d3748;
+            background-image:
+                repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.02) 0px, rgba(255, 255, 255, 0.02) 1px, transparent 1px, transparent 3px),
+                linear-gradient(180deg, #374151 0%, #111827 100%);
+            box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.8);
+        }
+
+        /* Metaliczny panel sterowania (jaśniejszy) */
+        .metallic-panel {
+            background: linear-gradient(to bottom, #374151 0%, #1f2937 100%);
+            border-top: 1px solid #6b7280;
+            border-bottom: 2px solid #111827;
+            box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.05), 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Przyciemnione szkło nad metalem */
+        .glass-panel {
+            background: rgba(17, 24, 39, 0.8);
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(75, 85, 99, 0.4);
+        }
+
+        /* Przemysłowe śrubki z nacięciem */
+        .screw {
+            width: 10px;
+            height: 10px;
+            background: radial-gradient(circle, #9ca3af 0%, #4b5563 100%);
+            border-radius: 50%;
+            box-shadow: inset 0 -1px 2px rgba(0, 0, 0, 0.9), 0 1px 1px rgba(255, 255, 255, 0.2);
+            position: absolute;
+            z-index: 10;
+        }
+
+        .screw::after {
+            content: '';
+            position: absolute;
+            top: 4px;
+            left: 1px;
+            right: 1px;
+            height: 2px;
+            background: rgba(0, 0, 0, 0.5);
+            transform: rotate(45deg);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+    </style>
 </head>
 
 <body class="bg-gray-950 text-white p-4 md:p-8 flex flex-col items-center min-h-screen">
@@ -24,7 +72,8 @@
             </div>
         </div>
 
-        <div id="trains-container" class="flex flex-col gap-4 w-full"></div>
+        <div id="trains-container" class="flex flex-col gap-5 w-full mt-2"></div>
+
         <div class="bg-black/50 p-4 rounded-xl border border-gray-800 shadow-inner mt-4">
             <h3 class="text-gray-600 text-xs font-bold mb-3 uppercase tracking-widest flex items-center gap-2">
                 <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span> Dziennik Zdarzeń
@@ -93,73 +142,76 @@
             const devButtonsHtml = sortedColors.map(([code, c]) => {
                 const th = twColors[c.ui_color] || twColors.gray;
                 const label = c.role === 'zone' ? `Z${c.zone_id}` : c.label.substring(0, 4);
-                return `<button onclick="control('{TID}', 'simulate', '${code}')" class="flex-1 bg-gray-800 hover:${th.hover} border ${th.border} ${th.text} h-6 rounded text-[9px] font-bold transition-colors" title="${c.label}">${label}</button>`;
+                return `<button onclick="control('{TID}', 'simulate', '${code}')" class="flex-1 bg-gray-800 hover:${th.hover} border ${th.border} ${th.text} h-6 rounded text-[9px] font-bold transition-colors shadow-sm" title="${c.label}">${label}</button>`;
             }).join('');
 
             container.innerHTML = Object.entries(sysConfig.trains).map(([id, t]) => {
                 const macSuffix = t.mac ? t.mac.slice(-5) : "Brak MAC";
                 const streamSrc = t.rasp_url ? `${t.rasp_url}/video?t=${Date.now()}` : "";
                 const resetBtnHtml = t.rasp_url ?
-                    `<button onclick="resetSensors('${id}', '${t.rasp_url}', this)" class="bg-gray-800 hover:bg-red-900/40 text-gray-400 hover:text-red-400 border border-gray-700 hover:border-red-500/50 text-[8px] px-2 py-0.5 rounded transition-colors shadow-sm">ZERUJ</button>`
+                    `<button onclick="resetSensors('${id}', '${t.rasp_url}', this)" class="metallic-panel hover:text-white border border-gray-600 hover:border-blue-400 text-gray-300 text-[8px] px-3 py-1 rounded transition-colors shadow-sm uppercase tracking-widest">Zeruj INS</button>`
                     : '';
 
                 return `
-                <div id="train-wrapper-${id}" class="bg-gray-800 rounded-xl border border-gray-700 shadow-2xl overflow-hidden transition-all duration-300 relative" onmouseenter="expandPanel('${id}')" onmouseleave="collapsePanel('${id}')">
+                <div id="train-wrapper-${id}" class="brushed-metal-bg rounded-xl border-2 border-gray-700 shadow-2xl overflow-hidden transition-all duration-300 relative p-2" onmouseenter="expandPanel('${id}')" onmouseleave="collapsePanel('${id}')">
+                    
+                    <div class="screw top-3 left-3"></div><div class="screw top-3 right-3"></div>
+                    <div class="screw bottom-3 left-3"></div><div class="screw bottom-3 right-3"></div>
 
-                    <div id="mini-view-${id}" class="flex flex-col md:flex-row items-center justify-between p-4 gap-4 bg-gray-800 cursor-pointer" onclick="expandPanel('${id}')">
+                    <div id="mini-view-${id}" class="glass-panel flex flex-col md:flex-row items-center justify-between p-4 gap-4 cursor-pointer rounded-lg relative z-20" onclick="expandPanel('${id}')">
                         
                         <div class="flex items-center gap-4 w-full md:w-1/3">
-                            <div class="w-12 h-12 bg-gray-900 rounded-full flex items-center justify-center border border-gray-700 shadow-inner">
-                                <svg class="w-6 h-6 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 11h16M12 3v8M8 19l-2 3M18 22l-2 3M8 15h.01M16 15h.01M4 3h16a2 2 0 012 2v14a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2z"></path></svg>
+                            <div class="w-12 h-12 metallic-panel rounded-full flex items-center justify-center border border-gray-600 shadow-lg">
+                                <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 11h16M12 3v8M8 19l-2 3M18 22l-2 3M8 15h.01M16 15h.01M4 3h16a2 2 0 012 2v14a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2z"></path></svg>
                             </div>
                             <div>
-                                <h2 class="text-xl font-black tracking-wider text-gray-200">${t.name}</h2>
+                                <h2 class="text-xl font-black tracking-wider text-gray-100">${t.name}</h2>
                                 <span id="mini-status-${id}" class="text-[10px] font-bold text-red-500 uppercase tracking-widest">ROZŁĄCZONY</span>
                             </div>
                         </div>
 
-                        <div class="flex flex-col items-center justify-center w-full md:w-1/3 border-l border-r border-gray-700 px-4">
-                            <span class="text-[9px] text-gray-500 uppercase tracking-widest">Prędkość Zadana</span>
-                            <div class="text-3xl font-mono font-bold text-green-500 drop-shadow-[0_0_5px_rgba(0,255,0,0.5)]" id="mini-speed-${id}">0%</div>
-                            <div class="text-[10px] font-bold mt-1 tracking-widest uppercase"><span id="mini-color-${id}" class="text-gray-500">CZEKAM NA SENSOR</span></div>
+                        <div class="flex flex-col items-center justify-center w-full md:w-1/3 border-l border-r border-gray-700/50 px-4">
+                            <span class="text-[9px] text-gray-400 uppercase tracking-widest">Prędkość Zadana</span>
+                            <div class="text-3xl font-mono font-bold text-green-500 drop-shadow-[0_0_8px_rgba(0,255,0,0.6)]" id="mini-speed-${id}">0%</div>
+                            <div class="text-[10px] font-bold mt-1 tracking-widest uppercase"><span id="mini-color-${id}" class="text-gray-400">CZEKAM NA SENSOR</span></div>
                         </div>
 
                         <div class="flex items-center justify-end w-full md:w-1/3 gap-4 pr-4">
-                            <div class="text-[10px] text-blue-400/70 uppercase tracking-widest text-right animate-pulse flex items-center gap-2">
+                            <div class="text-[10px] text-blue-300/80 uppercase tracking-widest text-right animate-pulse flex items-center gap-2 bg-blue-900/30 px-3 py-1.5 rounded-full border border-blue-500/30">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"></path></svg>
-                                Najedź myszką, aby<br>otworzyć kokpit
+                                Zbliż się, by otworzyć
                             </div>
                         </div>
                     </div>
 
-                    <div id="full-view-${id}" class="hidden flex-col xl:flex-row gap-6 p-5 w-full items-stretch border-t border-gray-700 bg-gray-900/80">
+                    <div id="full-view-${id}" class="hidden flex-col xl:flex-row gap-4 p-2 w-full items-stretch z-20 relative">
                         
-                        <div class="flex flex-col w-full xl:w-1/4 gap-4">
-                            <div class="flex justify-between items-center bg-gray-900 p-4 rounded-lg border border-gray-700 shadow-inner">
-                                <h2 class="text-2xl font-black tracking-wider">${t.name} <span class="text-xs text-gray-500 font-mono block xl:inline">(${macSuffix})</span></h2>
-                                <span id="status-${id}" class="text-xs font-bold text-red-500 uppercase tracking-widest px-2 py-1 bg-red-900/20 rounded border border-red-900">ROZŁĄCZONY</span>
+                        <div class="flex flex-col w-full xl:w-1/4 gap-3">
+                            <div class="flex justify-between items-center metallic-panel p-4 rounded-lg">
+                                <h2 class="text-xl font-black tracking-wider text-white">${t.name} <span class="text-[10px] text-gray-400 font-mono block xl:inline">(${macSuffix})</span></h2>
+                                <span id="status-${id}" class="text-xs font-bold text-red-500 uppercase tracking-widest px-2 py-1 bg-black/60 rounded border border-red-900/50 shadow-inner">ROZŁĄCZONY</span>
                             </div>
                             
                             <div class="flex gap-2">
-                                <button onclick="control('${id}', 'connect')" class="flex-1 bg-blue-900/40 text-blue-400 py-3 rounded text-sm font-bold hover:bg-blue-800/60 shadow border border-blue-800 transition-colors">POŁĄCZ</button>
-                                <button onclick="control('${id}', 'disconnect')" class="flex-1 bg-gray-900 text-gray-400 py-3 rounded text-sm font-bold hover:bg-gray-700 shadow border border-gray-700 transition-colors">ROZŁĄCZ</button>
+                                <button onclick="control('${id}', 'connect')" class="flex-1 metallic-panel py-3 rounded text-sm font-bold text-blue-400 hover:text-white hover:border-blue-500 transition-colors shadow-lg">POŁĄCZ</button>
+                                <button onclick="control('${id}', 'disconnect')" class="flex-1 metallic-panel py-3 rounded text-sm font-bold text-gray-400 hover:text-red-400 hover:border-red-500 transition-colors shadow-lg">ROZŁĄCZ</button>
                             </div>
 
-                            <div class="flex flex-col gap-2 bg-black/40 p-4 rounded-lg border border-gray-700">
-                                <span class="text-gray-500 text-[10px] font-bold uppercase tracking-widest block border-b border-gray-800 pb-1 mb-1">Optyczny skaner toru</span>
+                            <div class="flex flex-col gap-2 glass-panel p-4 rounded-lg mt-auto">
+                                <span class="text-gray-400 text-[10px] font-bold uppercase tracking-widest block border-b border-gray-700 pb-1 mb-1">Optyczny Skaner Toru</span>
                                 <div class="flex justify-between items-center">
-                                    <div class="text-[11px] font-mono flex gap-3">
-                                        <span class="text-red-500">R:<span id="r-${id}" class="text-gray-300 ml-1">0</span></span>
-                                        <span class="text-green-500">G:<span id="g-${id}" class="text-gray-300 ml-1">0</span></span>
-                                        <span class="text-blue-500">B:<span id="b-${id}" class="text-gray-300 ml-1">0</span></span>
+                                    <div class="text-[11px] font-mono flex gap-3 bg-black/50 px-2 py-1 rounded shadow-inner border border-gray-800">
+                                        <span class="text-red-500">R:<span id="r-${id}" class="text-gray-200 ml-1">0</span></span>
+                                        <span class="text-green-500">G:<span id="g-${id}" class="text-gray-200 ml-1">0</span></span>
+                                        <span class="text-blue-500">B:<span id="b-${id}" class="text-gray-200 ml-1">0</span></span>
                                     </div>
-                                    <span id="color-${id}" class="text-[11px] font-bold text-gray-500 tracking-widest px-2 py-0.5 rounded bg-gray-900 border border-gray-800">CZEKAM</span>
+                                    <span id="color-${id}" class="text-[11px] font-bold text-gray-400 tracking-widest px-2 py-1 rounded metallic-panel">CZEKAM</span>
                                 </div>
                             </div>
 
-                            <div id="dev-tools-${id}" class="mt-auto hidden">
-                                <div class="bg-gray-900/60 p-3 rounded-lg border border-gray-700/50 border-dashed">
-                                    <span class="text-[9px] text-gray-500 uppercase tracking-widest block mb-2 text-center">Panel Symulacji (DEV)</span>
+                            <div id="dev-tools-${id}" class="hidden">
+                                <div class="glass-panel p-3 rounded-lg border-dashed border-gray-600">
+                                    <span class="text-[9px] text-gray-400 uppercase tracking-widest block mb-2 text-center">Symulacja (DEV)</span>
                                     <div class="flex space-x-1">
                                         ${devButtonsHtml.replace(/{TID}/g, id)}
                                     </div>
@@ -167,104 +219,110 @@
                             </div>
                         </div>
                         
-                        <div class="flex flex-col w-full xl:w-1/4 gap-4">
-                            <div class="text-center bg-black p-4 rounded-lg border border-gray-700 flex-1 flex flex-col justify-center items-center shadow-inner relative overflow-hidden">
+                        <div class="flex flex-col w-full xl:w-1/4 gap-3">
+                            <div class="text-center bg-black/80 p-4 rounded-lg border-2 border-gray-800 flex-1 flex flex-col justify-center items-center shadow-[inset_0_0_20px_rgba(0,0,0,1)] relative overflow-hidden">
                                 <div class="absolute inset-0 bg-[linear-gradient(rgba(0,255,0,0.03)_1px,transparent_1px)] bg-[size:100%_4px] pointer-events-none"></div>
                                 <span class="text-gray-500 font-bold uppercase text-[10px] tracking-widest z-10">Prędkość Zadana</span>
-                                <span id="speed-${id}" class="text-6xl font-mono font-bold text-green-500 block mt-2 z-10 drop-shadow-[0_0_8px_rgba(0,255,0,0.5)]">0%</span>
+                                <span id="speed-${id}" class="text-6xl font-mono font-bold text-green-500 block mt-2 z-10 drop-shadow-[0_0_12px_rgba(0,255,0,0.8)]">0%</span>
                             </div>
-                            <div class="grid grid-cols-2 gap-3">
-                                <button onclick="control('${id}', 'move', 'up')" class="bg-gray-800 text-green-500 border border-green-900 py-4 rounded-lg font-bold tracking-wider hover:bg-gray-700 hover:text-green-400 shadow-sm text-sm transition-all">PRZYSPIESZ (+)</button>
-                                <button onclick="control('${id}', 'move', 'down')" class="bg-gray-800 text-yellow-500 border border-yellow-900 py-4 rounded-lg font-bold tracking-wider hover:bg-gray-700 hover:text-yellow-400 shadow-sm text-sm transition-all">ZWOLNIJ (-)</button>
+                            <div class="grid grid-cols-2 gap-2">
+                                <button onclick="control('${id}', 'move', 'up')" class="metallic-panel text-green-400 py-4 rounded-lg font-bold tracking-wider hover:text-green-300 hover:border-green-500 shadow-lg text-sm transition-all border border-gray-600">PRZYSPIESZ (+)</button>
+                                <button onclick="control('${id}', 'move', 'down')" class="metallic-panel text-yellow-400 py-4 rounded-lg font-bold tracking-wider hover:text-yellow-300 hover:border-yellow-500 shadow-lg text-sm transition-all border border-gray-600">ZWOLNIJ (-)</button>
                             </div>
-                            <button onclick="control('${id}', 'stop')" class="w-full bg-gray-800 text-red-500 border border-red-900 py-3 rounded-lg font-black hover:bg-red-900/40 hover:text-red-400 shadow-sm text-xl tracking-[0.2em] transition-all">STOP</button>
+                            <button onclick="control('${id}', 'stop')" class="w-full bg-gradient-to-b from-red-700 to-red-900 border-t-2 border-red-500 border-b-4 border-red-950 text-white py-3 rounded-lg font-black hover:from-red-600 hover:to-red-800 shadow-[0_4px_15px_rgba(220,38,38,0.5)] text-xl tracking-[0.2em] transition-all">STOP</button>
                         </div>
 
-                        <div class="flex flex-col xl:flex-row w-full xl:w-2/4 bg-gray-900 rounded-lg border border-gray-700 overflow-hidden shadow-inner">
+                        <div class="flex flex-col xl:flex-row w-full xl:w-2/4 glass-panel rounded-lg overflow-hidden">
                             
-                            <div class="relative w-full xl:w-7/12 bg-black flex items-center justify-center min-h-[220px]">
+                            <div class="relative w-full xl:w-7/12 bg-black border-r border-gray-700/50 flex items-center justify-center min-h-[220px]">
+                                <div class="screw top-2 left-2"></div><div class="screw top-2 right-2"></div>
+                                <div class="screw bottom-2 left-2"></div><div class="screw bottom-2 right-2"></div>
+
                                 <span class="text-gray-600 text-xs font-mono text-center px-4 absolute z-0" id="cam-placeholder-${id}">
                                     Oczekiwanie na wideo...<br>
                                     <span class="text-[9px] opacity-50 block mt-2">${t.rasp_url || 'Brak strumienia'}</span>
                                 </span>
-                                <img id="cam-img-${id}" src="${streamSrc}" class="${streamSrc ? 'absolute' : 'hidden'} inset-0 w-full h-full object-cover z-10 bg-black/50" alt="" onerror="this.classList.add('hidden'); document.getElementById('cam-placeholder-${id}').classList.remove('hidden');">
-                                <div class="absolute top-2 left-2 z-20 bg-black/80 px-2 py-1 rounded text-[9px] font-mono text-green-400 border border-green-500/30 tracking-widest flex items-center gap-2">
-                                    <div class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div> FPV // LIVE
+                                <img id="cam-img-${id}" data-src="${streamSrc}" class="hidden absolute inset-0 w-full h-full object-cover z-10 opacity-90" alt="" onerror="this.classList.add('hidden'); document.getElementById('cam-placeholder-${id}').classList.remove('hidden');">
+                                
+                                <div class="absolute inset-0 bg-[linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px)] bg-[size:100%_3px] pointer-events-none z-20"></div>
+
+                                <div class="absolute top-2 left-1/2 -translate-x-1/2 z-30 bg-black/80 px-3 py-0.5 rounded text-[9px] font-mono text-green-400 border border-green-500/50 tracking-widest flex items-center gap-2 shadow-[0_0_10px_rgba(0,255,0,0.2)]">
+                                    <div class="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse"></div> FPV LIVE
                                 </div>
                             </div>
                             
-                            <div class="w-full xl:w-5/12 flex flex-col border-t xl:border-t-0 xl:border-l border-gray-800 bg-gray-900/80 p-3 gap-3">
+                            <div class="w-full xl:w-5/12 flex flex-col p-3 gap-3">
                                 
                                 <div>
-                                    <h4 class="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1 border-b border-gray-800 pb-1">
-                                        <svg class="w-3 h-3 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
+                                    <h4 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1 border-b border-gray-700 pb-1">
+                                        <svg class="w-3 h-3 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 10-9.78 2.096A4.001 4.001 0 003 15z"></path></svg>
                                         Atmosfera
                                     </h4>
                                     <div class="grid grid-cols-2 gap-2">
-                                        <div class="bg-black/40 p-2 rounded border border-gray-800/50 flex flex-col items-center justify-center">
-                                            <span class="text-[8px] text-gray-500 uppercase">Temperatura</span>
-                                            <div class="text-orange-400 font-mono"><span id="${id}-temp" class="text-lg font-bold">--</span><span class="text-xs text-gray-500 ml-0.5">°C</span></div>
+                                        <div class="metallic-panel p-2 rounded flex flex-col items-center justify-center">
+                                            <span class="text-[8px] text-gray-400 uppercase">Temp</span>
+                                            <div class="text-orange-400 font-mono drop-shadow-[0_0_5px_rgba(251,146,60,0.5)]"><span id="${id}-temp" class="text-lg font-bold">--</span><span class="text-[10px] text-gray-500 ml-0.5">°C</span></div>
                                         </div>
-                                        <div class="bg-black/40 p-2 rounded border border-gray-800/50 flex flex-col items-center justify-center">
-                                            <span class="text-[8px] text-gray-500 uppercase">Wilgotność</span>
-                                            <div class="text-blue-400 font-mono"><span id="${id}-hum" class="text-lg font-bold">--</span><span class="text-xs text-gray-500 ml-0.5">%</span></div>
+                                        <div class="metallic-panel p-2 rounded flex flex-col items-center justify-center">
+                                            <span class="text-[8px] text-gray-400 uppercase">Wilg</span>
+                                            <div class="text-blue-400 font-mono drop-shadow-[0_0_5px_rgba(96,165,250,0.5)]"><span id="${id}-hum" class="text-lg font-bold">--</span><span class="text-[10px] text-gray-500 ml-0.5">%</span></div>
                                         </div>
-                                        <div class="bg-black/40 p-2 rounded border border-gray-800/50 flex flex-col items-center justify-center">
-                                            <span class="text-[8px] text-gray-500 uppercase">Ciśnienie</span>
-                                            <div class="text-teal-400 font-mono"><span id="${id}-pres" class="text-lg font-bold">--</span><span class="text-xs text-gray-500 ml-0.5">hPa</span></div>
+                                        <div class="metallic-panel p-2 rounded flex flex-col items-center justify-center">
+                                            <span class="text-[8px] text-gray-400 uppercase">Ciśn</span>
+                                            <div class="text-teal-400 font-mono drop-shadow-[0_0_5px_rgba(45,212,191,0.5)]"><span id="${id}-pres" class="text-lg font-bold">--</span><span class="text-[10px] text-gray-500 ml-0.5">hPa</span></div>
                                         </div>
-                                        <div class="bg-black/40 p-2 rounded border border-gray-800/50 flex flex-col items-center justify-center">
-                                            <span class="text-[8px] text-gray-500 uppercase">Gaz</span>
-                                            <div class="text-purple-400 font-mono"><span id="${id}-gas" class="text-lg font-bold">--</span><span class="text-xs text-gray-500 ml-0.5">kΩ</span></div>
+                                        <div class="metallic-panel p-2 rounded flex flex-col items-center justify-center">
+                                            <span class="text-[8px] text-gray-400 uppercase">Gaz</span>
+                                            <div class="text-purple-400 font-mono drop-shadow-[0_0_5px_rgba(192,132,252,0.5)]"><span id="${id}-gas" class="text-lg font-bold">--</span><span class="text-[10px] text-gray-500 ml-0.5">kΩ</span></div>
                                         </div>
                                     </div>
                                 </div>
                                 
                                 <div class="flex-1 flex flex-col">
-                                    <div class="flex items-center justify-between border-b border-gray-800 pb-1 mb-2">
-                                        <h4 class="text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-1">
+                                    <div class="flex items-center justify-between border-b border-gray-700 pb-1 mb-2">
+                                        <h4 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest flex items-center gap-1">
                                             <svg class="w-3 h-3 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
-                                            Nawigacja Inercyjna
+                                            Inercja (INS)
                                         </h4>
                                         ${resetBtnHtml}
                                     </div>
-                                    <div class="flex items-center justify-between bg-black/40 p-2 rounded border border-gray-800/50 flex-1">
+                                    <div class="flex items-center justify-between metallic-panel p-2 rounded flex-1">
                                         
                                         <div class="grid grid-cols-2 gap-x-2 gap-y-1 w-full pr-2">
                                             <div class="flex flex-col">
-                                                <span class="text-[7px] text-gray-500 uppercase">Wibracje</span>
-                                                <div class="text-green-500 font-mono"><span id="${id}-accel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m/s²</span></div>
+                                                <span class="text-[7px] text-gray-400 uppercase">Wibracje</span>
+                                                <div class="text-green-400 font-mono"><span id="${id}-accel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m/s²</span></div>
                                             </div>
                                             <div class="flex flex-col">
-                                                <span class="text-[7px] text-gray-500 uppercase">Prędkość</span>
-                                                <div class="text-blue-500 font-mono"><span id="${id}-vel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">km/h</span></div>
+                                                <span class="text-[7px] text-gray-400 uppercase">Prędkość</span>
+                                                <div class="text-blue-400 font-mono"><span id="${id}-vel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">km/h</span></div>
                                             </div>
                                             <div class="flex flex-col">
-                                                <span class="text-[7px] text-gray-500 uppercase">Dystans</span>
-                                                <div class="text-purple-500 font-mono"><span id="${id}-dist" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m</span></div>
+                                                <span class="text-[7px] text-gray-400 uppercase">Dystans</span>
+                                                <div class="text-purple-400 font-mono"><span id="${id}-dist" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m</span></div>
                                             </div>
                                             <div class="flex flex-col">
-                                                <span class="text-[7px] text-gray-500 uppercase">Rotacja</span>
-                                                <div class="text-teal-500 font-mono"><span id="${id}-gyr" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">rad/s</span></div>
+                                                <span class="text-[7px] text-gray-400 uppercase">Rotacja</span>
+                                                <div class="text-teal-400 font-mono"><span id="${id}-gyr" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">rad/s</span></div>
                                             </div>
                                         </div>
                                         
                                         <div class="flex flex-col items-center justify-center">
-                                            <div class="relative w-14 h-14 rounded-full border border-gray-700 bg-black shadow-[inset_0_0_10px_rgba(0,0,0,0.8)]">
-                                                <div class="absolute inset-0 flex items-center justify-center text-[7px] text-gray-600 font-bold">
-                                                    <span class="absolute top-0.5 text-red-900/80">N</span>
+                                            <div class="relative w-12 h-12 rounded-full border-2 border-gray-600 bg-black shadow-[inset_0_0_8px_rgba(0,0,0,1)]">
+                                                <div class="absolute inset-0 flex items-center justify-center text-[6px] text-gray-500 font-bold">
+                                                    <span class="absolute top-0.5 text-red-500">N</span>
                                                     <span class="absolute bottom-0.5">S</span>
                                                     <span class="absolute left-0.5">W</span>
                                                     <span class="absolute right-0.5">E</span>
                                                 </div>
                                                 <div id="compass-needle-${id}" class="absolute inset-0 flex items-center justify-center transition-transform duration-500 ease-out">
-                                                    <div class="w-0.5 h-7 bg-gradient-to-t from-transparent via-red-600 to-red-500 rounded-full shadow-[0_0_5px_red]"></div>
+                                                    <div class="w-0.5 h-7 bg-red-500 rounded-full shadow-[0_0_4px_red]"></div>
                                                 </div>
                                                 <div class="absolute inset-0 flex items-center justify-center">
-                                                    <div class="w-1.5 h-1.5 bg-gray-400 rounded-full shadow-sm"></div>
+                                                    <div class="w-1.5 h-1.5 bg-gray-300 rounded-full shadow-sm"></div>
                                                 </div>
                                             </div>
-                                            <div class="text-yellow-500 font-mono mt-1"><span id="${id}-heading" class="text-xs font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">°</span></div>
+                                            <div class="text-yellow-400 font-mono mt-1 drop-shadow-[0_0_3px_rgba(250,204,21,0.5)]"><span id="${id}-heading" class="text-xs font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">°</span></div>
                                         </div>
 
                                     </div>
@@ -279,42 +337,52 @@
         }
 
         // ==========================================
-        // ZAKTUALIZOWANA LOGIKA HOVER (Tylko UI)
+        // LOGIKA HOVER
         // ==========================================
         function expandPanel(id) {
             if (activeTrainId === id) return;
             activeTrainId = id;
 
-            // Ukryj miniaturkę, pokaż pełny widok
             document.getElementById(`mini-view-${id}`).classList.add('hidden');
             document.getElementById(`mini-view-${id}`).classList.remove('flex');
             document.getElementById(`full-view-${id}`).classList.remove('hidden');
             document.getElementById(`full-view-${id}`).classList.add('flex');
 
-            // Efekt wizualny podświetlenia aktywnego pociągu
-            document.getElementById(`train-wrapper-${id}`).classList.add('border-blue-500/50', 'shadow-[0_0_15px_rgba(59,130,246,0.15)]');
+            document.getElementById(`train-wrapper-${id}`).classList.add('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
+            document.getElementById(`train-wrapper-${id}`).classList.remove('border-gray-700');
 
-            fetchRaspData(); // Wymuś natychmiastowe pobranie telemetrii (wideo ładuje się w tle)
+            fetchRaspData();
+
+            const img = document.getElementById(`cam-img-${id}`);
+            if (img && img.dataset.src) {
+                if (!img.src || img.src === window.location.href) {
+                    img.src = img.dataset.src;
+                    img.classList.remove('hidden');
+                    document.getElementById(`cam-placeholder-${id}`).classList.add('hidden');
+                }
+            }
         }
 
         function collapsePanel(id) {
             if (activeTrainId === id) activeTrainId = null;
 
-            // Ukryj pełny widok, pokaż miniaturkę
             document.getElementById(`full-view-${id}`).classList.add('hidden');
             document.getElementById(`full-view-${id}`).classList.remove('flex');
             document.getElementById(`mini-view-${id}`).classList.remove('hidden');
             document.getElementById(`mini-view-${id}`).classList.add('flex');
 
-            // Usunięcie poświaty
-            document.getElementById(`train-wrapper-${id}`).classList.remove('border-blue-500/50', 'shadow-[0_0_15px_rgba(59,130,246,0.15)]');
+            document.getElementById(`train-wrapper-${id}`).classList.remove('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
+            document.getElementById(`train-wrapper-${id}`).classList.add('border-gray-700');
+
+            const img = document.getElementById(`cam-img-${id}`);
+            if (img) img.src = "";
         }
         // ==========================================
 
         async function resetSensors(id, raspUrl, btn) {
             if (!raspUrl) return;
             const originalText = btn.innerText;
-            btn.innerText = "KALIB...";
+            btn.innerText = "WAIT..";
             btn.disabled = true;
             try {
                 await fetch(`${raspUrl}/api/telemetry/reset`, { method: 'POST' });
@@ -390,7 +458,6 @@
                 }
 
                 for (const [id, tData] of Object.entries(data.trains)) {
-                    // Update Speed in both Full and Mini view
                     const speedEl = document.getElementById(`speed-${id}`);
                     const miniSpeedEl = document.getElementById(`mini-speed-${id}`);
                     if (speedEl) speedEl.innerText = tData.speed + '%';
@@ -405,21 +472,19 @@
                         if (bEl) bEl.innerText = tData.rgb.b;
                     }
 
-                    // Update RGB Color Tag in both Full and Mini view
                     const colorEl = document.getElementById(`color-${id}`);
                     const miniColorEl = document.getElementById(`mini-color-${id}`);
                     const th = twColors[tData.ui_color] || twColors.gray;
 
                     if (colorEl) {
                         colorEl.innerText = tData.color_text;
-                        colorEl.className = `text-[11px] font-bold tracking-widest px-2 py-0.5 rounded bg-gray-900 border border-gray-800 ${th.text}`;
+                        colorEl.className = `text-[11px] font-bold tracking-widest px-2 py-0.5 rounded metallic-panel ${th.text}`;
                     }
                     if (miniColorEl) {
                         miniColorEl.innerText = tData.color_text;
-                        miniColorEl.className = `${th.text}`; // Only text color for minimal view
+                        miniColorEl.className = `${th.text}`;
                     }
 
-                    // Update Connection Status in both Full and Mini view
                     const statusEl = document.getElementById(`status-${id}`);
                     const miniStatusEl = document.getElementById(`mini-status-${id}`);
                     const devTools = document.getElementById(`dev-tools-${id}`);
@@ -430,17 +495,17 @@
 
                     if (tData.connection === 'bt') {
                         text = 'POŁĄCZONO (BT)';
-                        cls = 'text-xs font-bold text-green-400 uppercase tracking-widest px-2 py-1 bg-green-900/20 rounded border border-green-900/50';
+                        cls = 'text-xs font-bold text-green-400 uppercase tracking-widest px-2 py-1 bg-black/50 shadow-inner rounded border border-green-900/50';
                         miniCls = 'text-[10px] font-bold text-green-400 uppercase tracking-widest';
                         if (devTools) devTools.classList.add('hidden');
                     } else if (tData.connection === 'virtual') {
                         text = 'WIRTUALNY (DEV)';
-                        cls = 'text-xs font-bold text-yellow-500 uppercase tracking-widest px-2 py-1 bg-yellow-900/20 rounded border border-yellow-900/50 animate-pulse';
+                        cls = 'text-xs font-bold text-yellow-500 uppercase tracking-widest px-2 py-1 bg-black/50 shadow-inner rounded border border-yellow-900/50 animate-pulse';
                         miniCls = 'text-[10px] font-bold text-yellow-500 uppercase tracking-widest animate-pulse';
                         if (devTools) devTools.classList.remove('hidden');
                     } else {
                         text = 'ROZŁĄCZONY';
-                        cls = 'text-xs font-bold text-red-500 uppercase tracking-widest px-2 py-1 bg-red-900/20 rounded border border-red-900/50';
+                        cls = 'text-xs font-bold text-red-500 uppercase tracking-widest px-2 py-1 bg-black/50 shadow-inner rounded border border-red-900/50';
                         miniCls = 'text-[10px] font-bold text-red-500 uppercase tracking-widest';
                         if (devTools) devTools.classList.add('hidden');
                     }
