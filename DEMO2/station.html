@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Tablica Dworcowa FRMCS</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap');
+
+        body {
+            background-color: #001220;
+            /* Dworcowy głęboki granat */
+            color: #4da8da;
+            /* Dworcowy błękit LED */
+            font-family: 'Share Tech Mono', monospace;
+            overflow: hidden;
+            margin: 0;
+            padding: 0;
+        }
+
+        .board-container {
+            border: 8px solid #000;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), inset 0 0 20px rgba(0, 0, 0, 0.5);
+            background-color: #000c14;
+        }
+
+        .led-text {
+            text-shadow: 0 0 8px rgba(77, 168, 218, 0.8);
+        }
+
+        .led-text-alert {
+            color: #ffb703;
+            text-shadow: 0 0 8px rgba(255, 183, 3, 0.8);
+        }
+
+        @keyframes marquee {
+            0% {
+                transform: translateX(100vw);
+            }
+
+            100% {
+                transform: translateX(-100%);
+            }
+        }
+    </style>
+</head>
+
+<body class="h-screen w-screen p-4 md:p-8 flex flex-col items-center justify-center">
+
+    <div class="board-container w-full max-w-7xl h-full flex flex-col p-6">
+
+        <div class="flex justify-between items-end border-b-4 border-[#4da8da] pb-4 mb-6">
+            <div>
+                <h1 class="text-4xl led-text uppercase font-bold tracking-widest">STACJA GŁÓWNA FRMCS</h1>
+                <p class="text-xl opacity-80 uppercase mt-1">Przyjazdy i Odjazdy / Arrivals & Departures</p>
+            </div>
+            <div class="text-6xl led-text font-bold tracking-widest" id="clock">00:00:00</div>
+        </div>
+
+        <div class="w-full flex-1">
+            <div
+                class="grid grid-cols-12 gap-4 text-2xl font-bold border-b-2 border-[#4da8da]/50 pb-2 mb-4 opacity-70 tracking-wider">
+                <div class="col-span-5 uppercase">Pociąg / Train</div>
+                <div class="col-span-4 uppercase">Strefa / Zone</div>
+                <div class="col-span-3 text-right uppercase">Status</div>
+            </div>
+
+            <div id="board-rows" class="flex flex-col gap-4">
+                <p class="text-center w-full text-[#4da8da] font-mono animate-pulse mt-10">Ładowanie rozkładu jazdy...
+                </p>
+            </div>
+        </div>
+
+        <div class="mt-auto border-t-4 border-[#4da8da] pt-3 overflow-hidden whitespace-nowrap">
+            <div
+                class="inline-block animate-[marquee_20s_linear_infinite] text-2xl text-[#ffb703] led-text-alert font-bold tracking-widest">
+                *** UWAGA PODRÓŻNI! PROSIMY NIE ZBLIŻAĆ SIĘ DO KRAWĘDZI MAKIETY. BAGGAGE LEFT UNATTENDED WILL BE
+                DESTROYED. ***
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let sysConfig = null;
+        let previousZones = {};
+        let audioInitialized = true;
+
+        // ----------------------------------------------------
+        // LOGIKA AUTOSTARTU DŹWIĘKU
+        // ----------------------------------------------------
+        window.addEventListener('DOMContentLoaded', () => {
+            const utter = new SpeechSynthesisUtterance("");
+            window.speechSynthesis.speak(utter);
+
+            setTimeout(() => {
+                playDingDong();
+                setTimeout(() => {
+                    speak("System informacji pasażerskiej uruchomiony pomyślnie.");
+                }, 1500);
+            }, 1000);
+        });
+
+        // ----------------------------------------------------
+        // ZEGAR CZASU RZECZYWISTEGO
+        // ----------------------------------------------------
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('clock').innerText = now.toLocaleTimeString('pl-PL', { hour12: false });
+        }, 1000);
+
+        // ----------------------------------------------------
+        // SYNTEZATOR GONGU DWORCOWEGO (Web Audio API)
+        // ----------------------------------------------------
+        function playDingDong() {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+
+            function playTone(freq, time, duration) {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(freq, ctx.currentTime + time);
+                gain.gain.setValueAtTime(0.5, ctx.currentTime + time);
+                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + time + duration);
+                osc.start(ctx.currentTime + time);
+                osc.stop(ctx.currentTime + time + duration);
+            }
+
+            playTone(659.25, 0, 1.5);    // Nuta E5
+            playTone(523.25, 0.6, 2.0);  // Nuta C5
+        }
+
+        // ----------------------------------------------------
+        // SYNTEZATOR MOWY
+        // ----------------------------------------------------
+        function speak(text) {
+            if (!audioInitialized) return;
+            window.speechSynthesis.cancel();
+            const msg = new SpeechSynthesisUtterance(text);
+            msg.lang = 'pl-PL';
+            msg.rate = 0.85;
+            msg.pitch = 1.0;
+            window.speechSynthesis.speak(msg);
+        }
+
+        async function fetchConfig() {
+            try {
+                const res = await fetch('/api/config');
+                sysConfig = await res.json();
+            } catch (e) {
+                console.error("Błąd pobierania konfiguracji: ", e);
+            }
+        }
+
+        // ----------------------------------------------------
+        // GŁÓWNA LOGIKA AKTUALIZACJI TABLICY
+        // ----------------------------------------------------
+        async function updateBoard() {
+            if (!sysConfig) await fetchConfig();
+            if (!sysConfig) return;
+
+            try {
+                const res = await fetch('/api/status');
+                if (!res.ok) return;
+                const data = await res.json();
+
+                const boardRows = document.getElementById('board-rows');
+                let rowsHtml = '';
+
+                for (const [z_id, occupant] of Object.entries(data.zones)) {
+                    let zoneLabel = `Strefa ${z_id}`;
+                    let spokenZoneLabel = `strefa ${z_id}`;
+
+                    for (const colorObj of Object.values(sysConfig.colors)) {
+                        if (colorObj.zone_id == z_id) {
+                            zoneLabel = `Strefa ${colorObj.label}`;
+                            spokenZoneLabel = `strefa ${colorObj.label}`;
+                            break;
+                        }
+                    }
+
+                    if (occupant) {
+                        rowsHtml += `
+                        <div class="grid grid-cols-12 gap-4 text-4xl border-b border-[#4da8da]/20 pb-4 items-center animate-pulse">
+                            <div class="col-span-5 text-white flex items-center gap-3 font-bold">
+                                <svg class="w-8 h-8 text-[#ffb703]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+                                ${occupant}
+                            </div>
+                            <div class="col-span-4 led-text font-bold">${zoneLabel}</div>
+                            <div class="col-span-3 text-right led-text-alert font-black">WJEŻDŻA</div>
+                        </div>`;
+
+                        if (previousZones[z_id] !== occupant) {
+                            playDingDong();
+                            setTimeout(() => {
+                                speak(`Bim bom. Uwaga podróżni. Pociąg, ${occupant}, wjechał na, ${spokenZoneLabel}. Prosimy zachować ostrożność.`);
+                            }, 1500);
+                        }
+                    }
+
+                    previousZones[z_id] = occupant;
+                }
+
+                Object.values(sysConfig.trains).forEach(t => {
+                    const isInZone = Object.values(data.zones).includes(t.name);
+
+                    if (!isInZone) {
+                        rowsHtml += `
+                        <div class="grid grid-cols-12 gap-4 text-3xl border-b border-[#4da8da]/20 pb-4 items-center opacity-50">
+                            <div class="col-span-5 text-gray-400 flex items-center gap-3 font-bold">
+                                ${t.name}
+                            </div>
+                            <div class="col-span-4 tracking-widest">W TRASIE...</div>
+                            <div class="col-span-3 text-right tracking-widest text-red-400/80">W DRODZE</div>
+                        </div>`;
+                    }
+                });
+
+                boardRows.innerHTML = rowsHtml;
+
+            } catch (e) { }
+        }
+
+        setInterval(updateBoard, 1000);
+    </script>
+</body>
+
+</html>
