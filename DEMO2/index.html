@@ -6,6 +6,7 @@
     <title>FRMCS Panel Widescreen</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
+        /* Szczotkowany metal / Ciemny plastik kokpitowy */
         .brushed-metal-bg {
             background-color: #2d3748;
             background-image:
@@ -14,6 +15,7 @@
             box-shadow: inset 0 0 30px rgba(0, 0, 0, 0.8);
         }
 
+        /* Metaliczny panel sterowania (jaśniejszy) */
         .metallic-panel {
             background: linear-gradient(to bottom, #374151 0%, #1f2937 100%);
             border-top: 1px solid #6b7280;
@@ -21,12 +23,14 @@
             box-shadow: inset 0 2px 4px rgba(255, 255, 255, 0.05), 0 4px 6px rgba(0, 0, 0, 0.3);
         }
 
+        /* Przyciemnione szkło nad metalem */
         .glass-panel {
             background: rgba(17, 24, 39, 0.8);
             backdrop-filter: blur(4px);
             border: 1px solid rgba(75, 85, 99, 0.4);
         }
 
+        /* Przemysłowe śrubki z nacięciem */
         .screw {
             width: 10px;
             height: 10px;
@@ -51,36 +55,66 @@
     </style>
 </head>
 
-<body class="bg-gray-950 text-white p-4 md:p-8 flex flex-col items-center min-h-screen">
+<body class="bg-gray-950 text-white min-h-screen overflow-x-hidden overflow-y-auto bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-gray-900 to-black">
 
-    <div class="w-full max-w-[98%] 2xl:max-w-[1600px] flex flex-col gap-6">
+    <div class="w-full flex justify-center">
+        <div id="dashboard-wrapper" class="w-[1550px] flex flex-col gap-6 origin-top mt-6 transition-transform duration-75">
 
-        <h1 class="text-3xl font-black tracking-widest text-blue-500 mb-2 border-b border-gray-800 pb-4 uppercase">
-            System Sterowania FRMCS <span class="text-sm font-mono text-gray-500 ml-4">// Dyspozytornia Główna</span>
-        </h1>
+            <h1 class="text-3xl font-black tracking-widest text-blue-500 mb-2 border-b border-gray-800 pb-4 uppercase">
+                System Sterowania FRMCS <span class="text-sm font-mono text-gray-500 ml-4">// Dyspozytornia Główna</span>
+            </h1>
 
-        <div class="bg-gray-900 p-4 rounded-xl border border-gray-800 shadow-xl">
-            <h3 class="text-gray-500 text-xs font-bold mb-4 uppercase tracking-widest flex items-center gap-2">
-                <div class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div> Blokada Liniowa (Strefy)
-            </h3>
-            <div id="zones-container" class="flex flex-col md:flex-row gap-4 w-full">
-                <p class="text-center w-full text-gray-600 font-mono animate-pulse">Inicjalizacja makiety...</p>
+            <div class="bg-gray-900 p-4 rounded-xl border border-gray-800 shadow-xl">
+                <h3 class="text-gray-500 text-xs font-bold mb-4 uppercase tracking-widest flex items-center gap-2">
+                    <div class="w-2 h-2 bg-yellow-500 rounded-full animate-pulse"></div> Blokada Liniowa (Strefy)
+                </h3>
+                <div id="zones-container" class="flex flex-row gap-4 w-full">
+                    <p class="text-center w-full text-gray-600 font-mono animate-pulse">Inicjalizacja makiety...</p>
+                </div>
             </div>
-        </div>
 
-        <div id="trains-container" class="flex flex-col gap-5 w-full mt-2"></div>
+            <div id="trains-container" class="flex flex-col gap-5 w-full mt-2"></div>
 
-        <div class="bg-black/50 p-4 rounded-xl border border-gray-800 shadow-inner mt-4">
-            <h3 class="text-gray-600 text-xs font-bold mb-3 uppercase tracking-widest flex items-center gap-2">
-                <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span> Dziennik Zdarzeń
-            </h3>
-            <ul id="system-logs"
-                class="text-xs font-mono text-blue-400/80 space-y-1 h-32 overflow-y-auto pl-2 border-l border-gray-800 flex flex-col-reverse">
-            </ul>
+            <div class="bg-black/50 p-4 rounded-xl border border-gray-800 shadow-inner mt-4">
+                <h3 class="text-gray-600 text-xs font-bold mb-3 uppercase tracking-widest flex items-center gap-2">
+                    <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span> Dziennik Zdarzeń
+                </h3>
+                <ul id="system-logs"
+                    class="text-xs font-mono text-blue-400/80 space-y-1 h-32 overflow-y-auto pl-2 border-l border-gray-800 flex flex-col-reverse">
+                </ul>
+            </div>
+
         </div>
     </div>
 
     <script>
+        // ==========================================
+        // SILNIK SKALOWANIA KOKPITU (TYLKO SZEROKOŚĆ)
+        // ==========================================
+        function adjustDashboardScale() {
+            const wrapper = document.getElementById('dashboard-wrapper');
+            const baseWidth = 1550; // Sztywna, optymalna szerokość naszego panelu
+
+            const windowWidth = window.innerWidth;
+
+            // Skalujemy TYLKO względem szerokości (zostawiając ok. 2% marginesu dla estetyki)
+            // Limitujemy maksymalne powiększenie do 1.2x na ogromnych ekranach
+            const scale = Math.min((windowWidth * 0.98) / baseWidth, 1.2);
+
+            wrapper.style.transform = `scale(${scale})`;
+
+            // KRYTYCZNE: Ponieważ transform:scale nie zmienia fizycznych wymiarów div'a w dokumencie,
+            // musimy ręcznie powiedzieć przeglądarce, jak wysoka jest zawartość po przeskalowaniu,
+            // aby pionowy pasek przewijania nie obcinał dołu panelu.
+            const scaledHeight = wrapper.offsetHeight * scale;
+            document.body.style.minHeight = `${scaledHeight + 100}px`; // + 100px marginesu dolnego
+        }
+
+        // Podpięcie eventów przeliczających
+        window.addEventListener('resize', adjustDashboardScale);
+        document.addEventListener('DOMContentLoaded', adjustDashboardScale);
+        // ==========================================
+
         let sysConfig = null;
         let activeTrainId = null;
 
@@ -104,6 +138,9 @@
 
                 renderTrains();
                 renderZones();
+                
+                // Wymuszenie przeliczenia skali i scrolla po wygenerowaniu zawartości
+                setTimeout(adjustDashboardScale, 100);
 
                 setInterval(updateStatus, 500);
                 // Przyspieszone pobieranie telemetrii dla lepszej detekcji zderzeń (co 300ms)
@@ -158,9 +195,9 @@
                     <div class="screw top-3 left-3"></div><div class="screw top-3 right-3"></div>
                     <div class="screw bottom-3 left-3"></div><div class="screw bottom-3 right-3"></div>
 
-                    <div id="mini-view-${id}" class="glass-panel flex flex-col md:flex-row items-center justify-between p-4 gap-4 cursor-pointer rounded-lg relative z-20" onclick="expandPanel('${id}')">
+                    <div id="mini-view-${id}" class="glass-panel flex flex-row items-center justify-between p-4 gap-4 cursor-pointer rounded-lg relative z-20" onclick="expandPanel('${id}')">
                         
-                        <div class="flex items-center gap-4 w-full md:w-1/3">
+                        <div class="flex items-center gap-4 w-1/3">
                             <div class="w-12 h-12 metallic-panel rounded-full flex items-center justify-center border border-gray-600 shadow-lg">
                                 <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 11h16M12 3v8M8 19l-2 3M18 22l-2 3M8 15h.01M16 15h.01M4 3h16a2 2 0 012 2v14a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2z"></path></svg>
                             </div>
@@ -170,13 +207,13 @@
                             </div>
                         </div>
 
-                        <div class="flex flex-col items-center justify-center w-full md:w-1/3 border-l border-r border-gray-700/50 px-4">
+                        <div class="flex flex-col items-center justify-center w-1/3 border-l border-r border-gray-700/50 px-4">
                             <span class="text-[9px] text-gray-400 uppercase tracking-widest">Prędkość Zadana</span>
                             <div class="text-3xl font-mono font-bold text-green-500 drop-shadow-[0_0_8px_rgba(0,255,0,0.6)]" id="mini-speed-${id}">0%</div>
                             <div class="text-[10px] font-bold mt-1 tracking-widest uppercase"><span id="mini-color-${id}" class="text-gray-400">CZEKAM NA SENSOR</span></div>
                         </div>
 
-                        <div class="flex items-center justify-end w-full md:w-1/3 gap-4 pr-4">
+                        <div class="flex items-center justify-end w-1/3 gap-4 pr-4">
                             <div class="text-[10px] text-blue-300/80 uppercase tracking-widest text-right animate-pulse flex items-center gap-2 bg-blue-900/30 px-3 py-1.5 rounded-full border border-blue-500/30">
                                 <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 15l-2 5L9 9l11 4-5 2zm0 0l5 5M7.188 2.239l.777 2.897M5.136 7.965l-2.898-.777M13.95 4.05l-2.122 2.122m-5.657 5.656l-2.12 2.122"></path></svg>
                                 Zbliż się, by otworzyć
@@ -184,11 +221,11 @@
                         </div>
                     </div>
 
-                    <div id="full-view-${id}" class="hidden flex-col xl:flex-row gap-4 p-2 w-full items-stretch z-20 relative">
+                    <div id="full-view-${id}" class="hidden flex-row gap-4 p-2 w-full items-stretch z-20 relative">
                         
-                        <div class="flex flex-col w-full xl:w-1/4 gap-3">
+                        <div class="flex flex-col w-1/4 gap-3">
                             <div class="flex justify-between items-center metallic-panel p-4 rounded-lg">
-                                <h2 class="text-xl font-black tracking-wider text-white">${t.name} <span class="text-[10px] text-gray-400 font-mono block xl:inline">(${macSuffix})</span></h2>
+                                <h2 class="text-xl font-black tracking-wider text-white">${t.name} <span class="text-[10px] text-gray-400 font-mono inline">(${macSuffix})</span></h2>
                                 <span id="status-${id}" class="text-xs font-bold text-red-500 uppercase tracking-widest px-2 py-1 bg-black/60 rounded border border-red-900/50 shadow-inner">ROZŁĄCZONY</span>
                             </div>
                             
@@ -219,7 +256,7 @@
                             </div>
                         </div>
                         
-                        <div class="flex flex-col w-full xl:w-1/4 gap-3">
+                        <div class="flex flex-col w-1/4 gap-3">
                             <div class="text-center bg-black/80 p-4 rounded-lg border-2 border-gray-800 flex-1 flex flex-col justify-center items-center shadow-[inset_0_0_20px_rgba(0,0,0,1)] relative overflow-hidden">
                                 <div class="absolute inset-0 bg-[linear-gradient(rgba(0,255,0,0.03)_1px,transparent_1px)] bg-[size:100%_4px] pointer-events-none"></div>
                                 <span class="text-gray-500 font-bold uppercase text-[10px] tracking-widest z-10">Prędkość Zadana</span>
@@ -232,9 +269,9 @@
                             <button onclick="control('${id}', 'stop')" class="w-full bg-gradient-to-b from-red-700 to-red-900 border-t-2 border-red-500 border-b-4 border-red-950 text-white py-3 rounded-lg font-black hover:from-red-600 hover:to-red-800 shadow-[0_4px_15px_rgba(220,38,38,0.5)] text-xl tracking-[0.2em] transition-all">STOP</button>
                         </div>
 
-                        <div class="flex flex-col xl:flex-row w-full xl:w-2/4 glass-panel rounded-lg overflow-hidden">
+                        <div class="flex flex-row w-2/4 glass-panel rounded-lg overflow-hidden">
                             
-                            <div class="relative w-full xl:w-7/12 bg-black border-r border-gray-700/50 flex items-center justify-center min-h-[220px]">
+                            <div class="relative w-7/12 bg-black border-r border-gray-700/50 flex items-center justify-center min-h-[220px]">
                                 <div class="screw top-2 left-2"></div><div class="screw top-2 right-2"></div>
                                 <div class="screw bottom-2 left-2"></div><div class="screw bottom-2 right-2"></div>
 
@@ -251,7 +288,7 @@
                                 </div>
                             </div>
                             
-                            <div class="w-full xl:w-5/12 flex flex-col p-3 gap-3">
+                            <div class="w-5/12 flex flex-col p-3 gap-3">
                                 
                                 <div>
                                     <h4 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 flex items-center gap-1 border-b border-gray-700 pb-1">
@@ -351,6 +388,9 @@
             document.getElementById(`train-wrapper-${id}`).classList.add('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
             document.getElementById(`train-wrapper-${id}`).classList.remove('border-gray-700');
 
+            // Przelicz skale żeby scrollbar się zaktualizował do nowej wysokości po rozwinięciu
+            setTimeout(adjustDashboardScale, 50);
+
             fetchRaspData();
 
             const img = document.getElementById(`cam-img-${id}`);
@@ -373,6 +413,9 @@
 
             document.getElementById(`train-wrapper-${id}`).classList.remove('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
             document.getElementById(`train-wrapper-${id}`).classList.add('border-gray-700');
+
+            // Przelicz po zwinięciu
+            setTimeout(adjustDashboardScale, 50);
 
             const img = document.getElementById(`cam-img-${id}`);
             if (img) img.src = "";

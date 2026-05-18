@@ -30,25 +30,19 @@ class ColorDetector:
         if r < 20 and g < 20 and b < 20:
             return None
 
-        # Automatyczne dopasowanie do konfiguracji z użyciem odległości euklidesowej
+        # Automatyczne dopasowanie do konfiguracji
         for code, cfg in COLORS_CONFIG.items():
-            if "rgb_center" in cfg:
-                center = cfg["rgb_center"]
-                threshold = cfg.get("distance_threshold", 50)
-                dr = r - center["r"]
-                dg = g - center["g"]
-                db = b - center["b"]
-                if dr * dr + dg * dg + db * db <= threshold * threshold:
-                    return code
-
-            elif "rgb_range" in cfg:
-                ranges = cfg["rgb_range"]
-                # Fallback na starszą konfigurację zakresową
-                match_r = ranges["r"][0] <= r <= ranges["r"][1]
-                match_g = ranges["g"][0] <= g <= ranges["g"][1]
-                match_b = ranges["b"][0] <= b <= ranges["b"][1]
-                if match_r and match_g and match_b:
-                    return code
+            if "rgb_range" not in cfg:
+                continue
+                
+            ranges = cfg["rgb_range"]
+            # Sprawdzamy czy R, G i B mieszczą się w zdefiniowanych widełkach
+            match_r = ranges["r"][0] <= r <= ranges["r"][1]
+            match_g = ranges["g"][0] <= g <= ranges["g"][1]
+            match_b = ranges["b"][0] <= b <= ranges["b"][1]
+            
+            if match_r and match_g and match_b:
+                return code
 
         return None
 

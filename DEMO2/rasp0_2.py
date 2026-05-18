@@ -4,6 +4,8 @@ import time
 import subprocess
 import uvicorn
 import board
+import threading
+import asyncio
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -152,29 +154,72 @@ class TelemetrySensors:
             
         return data
 
-# --- LOGIKA KAMERY ---
-def generate_frames():
-    cmd = [
-        "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--width", "480", "--height", "360",
-        "--framerate", "30", "-q", "40", "--inline", "-o", "-"
-    ]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    stream = b''
-    try:
+# ========================================================
+# KRYTYCZNY SILNIK WIDEO: NIEZALEŻNY WĄTEK DROPPINGU KLATEK
+# ========================================================
+class BackgroundCameraWorker:
+    def __init__(self):
+        self.latest_frame = None
+        self.process = None
+
+    def start(self):
+        # Odpalamy wątek demona, który żyje niezależnie od FastAPI i opróżnia bufor
+        threading.Thread(target=self._video_loop, daemon=True).start()
+
+    def _video_loop(self):
+        # Rozdzielczość 320x240 oraz 10-12 FPS to maksimum dla stabilności na 1 rdzeniu RPi Zero W!
+        cmd = [
+            "rpicam-vid", "-t", "0", "--codec", "mjpeg", 
+            "--width", "256", "--height", "144",
+            "--framerate", "11", "-q", "25", 
+            "--inline", "--flush", "-o", "-"
+        ]
+        self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        buffer = b''
+        
         while True:
-            chunk = process.stdout.read(4096)
-            if not chunk: break
-            stream += chunk
-            start = stream.find(b'\xff\xd8')
-            end = stream.find(b'\xff\xd9')
-            if start != -1 and end != -1:
-                jpg = stream[start:end+2]
-                stream = stream[end+2:]
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpg + b'\r\n')
-    except Exception:
-        process.terminate()
-    finally:
-        process.terminate()
+            try:
+                # Czytamy mniejsze porcje (1KB zamiast 4KB) by natychmiast reagować i czyścić potok
+                chunk = self.process.stdout.read(1024)
+                if not chunk:
+                    break
+                buffer += chunk
+                
+                while True:
+                    start = buffer.find(b'\xff\xd8')
+                    if start == -1:
+                        break
+                    
+                    # Jeśli na początku bufora zalegają śmieci z sieci, odrzucamy je
+                    if start > 0:
+                        buffer = buffer[start:]
+                        start = 0
+                        
+                    end = buffer.find(b'\xff\xd9')
+                    if end == -1:
+                        break
+                    
+                    # Nadpisujemy zmienną globalną NAJNOWSZĄ klatką. Stare są bezpowrotnie niszczone.
+                    self.latest_frame = buffer[:end+2]
+                    buffer = buffer[end+2:]
+            except Exception:
+                break
+
+# Inicjalizacja i natychmiastowy start wątku w tle
+video_worker = BackgroundCameraWorker()
+video_worker.start()
+
+# Generator klatek zmieniony na ASYNCHRONICZNY dla FastAPI (zerowe zużycie zasobów)
+async def generate_frames():
+    last_sent_frame = None
+    while True:
+        frame = video_worker.latest_frame
+        if frame and frame != last_sent_frame:
+            last_sent_frame = frame
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        # Śpimy 50ms (około 20Hz sprawdzania), co całkowicie odciąża procesor
+        await asyncio.sleep(0.05)
+# ========================================================
 
 # --- SERWER ---
 app = FastAPI()
@@ -202,7 +247,7 @@ HTML_TEMPLATE = """
             border-radius: 0.5rem; 
             border: 1px solid #1f2937; 
             background: #000; 
-            max-width: 540px; /* Zmniejszona szerokość kamery */
+            max-width: 540px; 
             margin: 0 auto; 
         }
         .video-overlay { 
@@ -237,7 +282,7 @@ HTML_TEMPLATE = """
                 <div class="scanline"></div>
                 <div class="video-overlay"></div>
                 <div class="absolute top-2 left-2 z-10 bg-black/60 px-2 py-0.5 rounded text-[9px] font-mono text-green-400 border border-green-500/30">
-                    CAM_01 // MJPEG_480P
+                    CAM_01 // LIVE_STREAM
                 </div>
                 <img src="/video" class="w-full h-auto block" alt="Strumień wideo">
             </div>
@@ -395,6 +440,7 @@ def reset_telemetry():
 
 @app.get("/video")
 def video_feed():
+    # Zwracanie strumienia z asynchronicznego generatora
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
 # --- URUCHOMIENIE SERWERA ---

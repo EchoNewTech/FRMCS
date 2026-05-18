@@ -18,12 +18,12 @@ TRAINS_CONFIG = {
     "express": {
         "name": "Express", 
         "mac": "9C:9A:C0:18:86:E1",
-        "rasp_url": "http://192.168.0.72:8001"
+        "rasp_url": "http://192.168.0.72:8001"  # <--- DODANE: Przypisanie Raspberry Pi 1 do Express
     },
     "cargo": {
         "name": "Cargo",   
         "mac": "9C:9A:C0:1A:7A:AF",
-        "rasp_url": f"http://{LOCAL_IP}:8002"
+        "rasp_url": f"http://{LOCAL_IP}:8002"   # <--- DODANE: Przypisanie Raspberry Pi 2 do Cargo
     }
 }
 
@@ -32,21 +32,21 @@ TRAINS_CONFIG = {
 COLORS_CONFIG = {
     # STREFY
     "S1":  {"role": "zone", "zone_id": 1, "label": "NIEBIESKI", "ui_color": "blue", "order": 1,
-         "rgb_center": {"r": 40, "g": 75, "b": 160}, "distance_threshold": 55},  
+         "rgb_range": {"r": (10, 40), "g": (50, 80), "b": (100, 150)}},  
          
     "S2":  {"role": "zone", "zone_id": 2, "label": "ZIELONY", "ui_color": "green", "order": 2,
-         "rgb_center": {"r": 35, "g": 100, "b": 40}, "distance_threshold": 55},
+         "rgb_range": {"r": (0, 80), "g": (70, 100), "b": (40, 70)}},
          
     "S3":  {"role": "zone", "zone_id": 3, "label": "POMARAŃCZOWY", "ui_color": "orange", "order": 3,
-         "rgb_center": {"r": 210, "g": 95, "b": 30}, "distance_threshold": 50},
+         "rgb_range": {"r": (70, 130), "g": (30, 60), "b": (0, 40)}},
          
     "S4": {"role": "zone", "zone_id": 4, "label": "BIAŁY", "ui_color": "slate", "order": 4,
-         "rgb_center": {"r": 240, "g": 240, "b": 240}, "distance_threshold": 35},
+         "rgb_range": {"r": (210, 255), "g": (210, 255), "b": (210, 255)}},
     
     # AKCJE
     "ST":  {"role": "action", "action": "stop", "label": "CZERWONY",  "ui_color": "red", "duration": 15, "order": 10,
-         "rgb_center": {"r": 180, "g": 30, "b": 50}, "distance_threshold": 40},
+         "rgb_range": {"r": (150, 180), "g": (0, 40), "b": (30, 65)}},
 
     "SL":  {"role": "action", "action": "slow", "label": "BRĄZOWY", "ui_color": "orange", "duration": 5, "speed_limit": 40, "order": 11,
-         "rgb_center": {"r": 110, "g": 70, "b": 40}, "distance_threshold": 45},
+         "rgb_range": {"r": (30, 70), "g": (20, 50), "b": (20, 50)}},
 }
