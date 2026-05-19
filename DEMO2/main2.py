@@ -42,7 +42,6 @@ trains = {
 class HardwareStationHUD:
     def __init__(self):
         self.oled = None
-        self.speaker_pin = 18 # Sprzętowy PWM (GPIO 18)
         
         # 1. Inicjalizacja Ekranu OLED przez I2C
         if adafruit_ssd1306:
@@ -51,38 +50,32 @@ class HardwareStationHUD:
                 self.oled = adafruit_ssd1306.SSD1306_I2C(128, 64, i2c)
                 self.oled.fill(0)
                 self.oled.show()
-                print("[HARDWARE] Wyświetlacz Grove OLED 0.96'' zainicjalizowany.")
+                print("[HARDWARE] Wyświetlacz Grove OLED zainicjalizowany.")
             except Exception as e:
                 print(f"[HARDWARE] Brak ekranu OLED lub błąd I2C: {e}")
                 
-        # 2. Inicjalizacja Głośnika Grove
-        if GPIO:
-            try:
-                GPIO.setmode(GPIO.BCM)
-                GPIO.setup(self.speaker_pin, GPIO.OUT)
-                print("[HARDWARE] Głośnik Grove (GPIO 18) zainicjalizowany.")
-            except Exception as e:
-                print(f"[HARDWARE] Błąd inicjalizacji głośnika GPIO: {e}")
+        # 2. Inicjalizacja Głośnika (przez wyjście audio Jack/HDMI/USB w Raspberry Pi)
+        try:
+            pygame.mixer.init()
+            print("[HARDWARE] Mikser audio (Pygame) zainicjalizowany.")
+        except Exception as e:
+            print(f"[HARDWARE] Błąd inicjalizacji audio: {e}")
 
     def play_gong(self):
-        """Generuje fizyczny, dwutonowy gong dworcowy Bim-Bom na głośniku."""
-        if not GPIO: return
-        
+        """Odtwarza prawdziwy plik MP3 z gongiem PKP w tle."""
         def run_gong():
             try:
-                # Ton 1: "Bim" (659Hz - E5)
-                pwm = GPIO.PWM(self.speaker_pin, 659)
-                pwm.start(50) # 50% wypełnienia cyklu
-                time.sleep(0.4)
+                # Wczytanie i odtworzenie pliku MP3
+                pygame.mixer.music.load("gong.wav")
+                pygame.mixer.music.play()
                 
-                # Ton 2: "Bom" (523Hz - C5)
-                pwm.ChangeFrequency(523)
-                time.sleep(0.6)
-                
-                pwm.stop()
-            except Exception: pass
+                # Czekamy aż dźwięk przestanie grać, żeby wątek nie zgasł za wcześnie
+                while pygame.mixer.music.get_busy():
+                    time.sleep(0.1)
+            except Exception as e:
+                print(f"[AUDIO BŁĄD] Nie można odtworzyć gong.wav: {e}")
             
-        # Odpalamy w tle, żeby nie blokować głównego wątku serwera
+        # Odpalamy w tle, żeby nie blokować głównego serwera FastAPI!
         asyncio.get_event_loop().run_in_executor(None, run_gong)
 
     def update_display(self, zones_data):
