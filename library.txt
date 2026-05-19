@@ -1,0 +1,4 @@
+dla rasp0
+
+dla rasp4/serwer
+pip install fastapi adafruit-blinka uvicorn board pillow bleak adafruit-circuitpython-ssd1306

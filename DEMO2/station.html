@@ -10,9 +10,7 @@
 
         body {
             background-color: #001220;
-            /* Dworcowy głęboki granat */
             color: #4da8da;
-            /* Dworcowy błękit LED */
             font-family: 'Share Tech Mono', monospace;
             overflow: hidden;
             margin: 0;
@@ -170,17 +168,14 @@
                 const boardRows = document.getElementById('board-rows');
                 let rowsHtml = '';
 
-                for (const [z_id, occupant] of Object.entries(data.zones)) {
-                    let zoneLabel = `Strefa ${z_id}`;
-                    let spokenZoneLabel = `strefa ${z_id}`;
+                // Pobranie i posortowanie stref numerycznie
+                const sortedZones = Object.entries(data.zones).sort((a, b) => {
+                    return parseInt(a[0]) - parseInt(b[0]);
+                });
 
-                    for (const colorObj of Object.values(sysConfig.colors)) {
-                        if (colorObj.zone_id == z_id) {
-                            zoneLabel = `Strefa ${colorObj.label}`;
-                            spokenZoneLabel = `strefa ${colorObj.label}`;
-                            break;
-                        }
-                    }
+                for (const [z_id, occupant] of sortedZones) {
+                    let zoneLabel = `STREFA ${z_id}`;
+                    let spokenZoneLabel = `strefa ${z_id}`;
 
                     if (occupant) {
                         rowsHtml += `
