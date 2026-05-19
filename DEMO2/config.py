@@ -47,6 +47,6 @@ COLORS_CONFIG = {
     "ST":  {"role": "action", "action": "stop", "label": "CZERWONY",  "ui_color": "red", "duration": 15, "order": 10,
          "rgb_range": {"r": (150, 180), "g": (0, 40), "b": (30, 65)}},
 
-    "SL":  {"role": "action", "action": "slow", "label": "BRĄZOWY", "ui_color": "orange", "duration": 5, "speed_limit": 40, "order": 11,
-         "rgb_range": {"r": (30, 70), "g": (20, 50), "b": (20, 50)}},
+    #"SL":  {"role": "action", "action": "slow", "label": "BRĄZOWY", "ui_color": "orange", "duration": 5, "speed_limit": 40, "order": 11,
+    #     "rgb_range": {"r": (30, 70), "g": (20, 50), "b": (20, 50)}},
 }

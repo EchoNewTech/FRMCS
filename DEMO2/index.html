@@ -93,33 +93,27 @@
         // ==========================================
         function adjustDashboardScale() {
             const wrapper = document.getElementById('dashboard-wrapper');
-            const baseWidth = 1550; // Sztywna, optymalna szerokość naszego panelu
+            const baseWidth = 1550;
 
             const windowWidth = window.innerWidth;
-
-            // Skalujemy TYLKO względem szerokości (zostawiając ok. 2% marginesu dla estetyki)
-            // Limitujemy maksymalne powiększenie do 1.2x na ogromnych ekranach
             const scale = Math.min((windowWidth * 0.98) / baseWidth, 1.2);
 
             wrapper.style.transform = `scale(${scale})`;
 
-            // KRYTYCZNE: Ponieważ transform:scale nie zmienia fizycznych wymiarów div'a w dokumencie,
-            // musimy ręcznie powiedzieć przeglądarce, jak wysoka jest zawartość po przeskalowaniu,
-            // aby pionowy pasek przewijania nie obcinał dołu panelu.
             const scaledHeight = wrapper.offsetHeight * scale;
-            document.body.style.minHeight = `${scaledHeight + 100}px`; // + 100px marginesu dolnego
+            document.body.style.minHeight = `${scaledHeight + 100}px`;
         }
 
-        // Podpięcie eventów przeliczających
         window.addEventListener('resize', adjustDashboardScale);
         document.addEventListener('DOMContentLoaded', adjustDashboardScale);
         // ==========================================
 
         let sysConfig = null;
         let activeTrainId = null;
+        let telemetrySockets = {}; // Globalny słownik dla aktywnych WebSocketów
 
         // UWAGA: PRÓG ZDERZENIA (w m/s^2). 
-        const COLLISION_THRESHOLD = 20.0;
+        const COLLISION_THRESHOLD = 6.0;
 
         const twColors = {
             blue: { text: 'text-blue-500', bg: 'bg-blue-600', hover: 'bg-blue-900', border: 'border-blue-600/30', zoneBg: 'bg-blue-900/20' },
@@ -139,12 +133,10 @@
                 renderTrains();
                 renderZones();
                 
-                // Wymuszenie przeliczenia skali i scrolla po wygenerowaniu zawartości
                 setTimeout(adjustDashboardScale, 100);
 
+                // Odpytywanie statusu dyspozytora (logi, strefy) nadal działa po HTTP
                 setInterval(updateStatus, 500);
-                // Przyspieszone pobieranie telemetrii dla lepszej detekcji zderzeń (co 300ms)
-                setInterval(fetchRaspData, 300);
             } catch (e) {
                 console.error("Czekam na uruchomienie serwera Python...", e);
                 setTimeout(initSystem, 2000);
@@ -374,54 +366,6 @@
         }
 
         // ==========================================
-        // LOGIKA KOKPITU
-        // ==========================================
-        function expandPanel(id) {
-            if (activeTrainId === id) return;
-            activeTrainId = id;
-
-            document.getElementById(`mini-view-${id}`).classList.add('hidden');
-            document.getElementById(`mini-view-${id}`).classList.remove('flex');
-            document.getElementById(`full-view-${id}`).classList.remove('hidden');
-            document.getElementById(`full-view-${id}`).classList.add('flex');
-
-            document.getElementById(`train-wrapper-${id}`).classList.add('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
-            document.getElementById(`train-wrapper-${id}`).classList.remove('border-gray-700');
-
-            // Przelicz skale żeby scrollbar się zaktualizował do nowej wysokości po rozwinięciu
-            setTimeout(adjustDashboardScale, 50);
-
-            fetchRaspData();
-
-            const img = document.getElementById(`cam-img-${id}`);
-            if (img && img.dataset.src) {
-                if (!img.src || img.src === window.location.href) {
-                    img.src = img.dataset.src;
-                    img.classList.remove('hidden');
-                    document.getElementById(`cam-placeholder-${id}`).classList.add('hidden');
-                }
-            }
-        }
-
-        function collapsePanel(id) {
-            if (activeTrainId === id) activeTrainId = null;
-
-            document.getElementById(`full-view-${id}`).classList.add('hidden');
-            document.getElementById(`full-view-${id}`).classList.remove('flex');
-            document.getElementById(`mini-view-${id}`).classList.remove('hidden');
-            document.getElementById(`mini-view-${id}`).classList.add('flex');
-
-            document.getElementById(`train-wrapper-${id}`).classList.remove('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
-            document.getElementById(`train-wrapper-${id}`).classList.add('border-gray-700');
-
-            // Przelicz po zwinięciu
-            setTimeout(adjustDashboardScale, 50);
-
-            const img = document.getElementById(`cam-img-${id}`);
-            if (img) img.src = "";
-        }
-
-        // ==========================================
         // SYSTEM DETEKCJI ZDERZEŃ
         // ==========================================
         function triggerCollisionAlert(id, accelVal) {
@@ -434,10 +378,9 @@
             const logs = document.getElementById('system-logs');
             const time = new Date().toLocaleTimeString();
             const logEntry = `<li class="text-red-500 font-bold bg-red-900/30 px-1 rounded animate-pulse">> [${time}] ⚠️ ALARM KRYTYCZNY: WYKRYTO ZDERZENIE / WYKOLEJENIE (${accelVal.toFixed(2)} m/s²) W POJEŹDZIE [${id.toUpperCase()}]! WDROŻONO HAMOWANIE NAGŁE!</li>`;
-            // Z racji flex-col-reverse logi dodajemy na początek
             logs.innerHTML = logEntry + logs.innerHTML;
 
-            // 3. Zmień wizualnie stan kokpitu (miganie na czerwono)
+            // 3. Zmień wizualnie stan kokpitu
             const wrapper = document.getElementById(`train-wrapper-${id}`);
             if (wrapper) {
                 wrapper.classList.remove('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
@@ -461,6 +404,129 @@
             }, 5000);
         }
 
+        // ==========================================
+        // WEBSOCKET TELEMETRIA
+        // ==========================================
+        function initTelemetryWebSocket(raspUrl, id) {
+            if (!raspUrl) return;
+
+            if (telemetrySockets[id] && telemetrySockets[id].readyState === WebSocket.OPEN) return;
+
+            const wsUrl = raspUrl.replace(/^http:/, 'ws:') + '/ws/telemetry';
+            console.log(`[WS] Łączenie z telemetrią: ${wsUrl}`);
+            
+            const ws = new WebSocket(wsUrl);
+            telemetrySockets[id] = ws;
+
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    const motion = data.motion;
+                    const env = data.environment;
+
+                    if (env && env.environment && env.environment.temperature_c !== null) {
+                        document.getElementById(`${id}-temp`).innerText = env.environment.temperature_c;
+                        document.getElementById(`${id}-hum`).innerText = env.environment.humidity_percent;
+                        document.getElementById(`${id}-pres`).innerText = Math.round(env.environment.pressure_hpa);
+                        document.getElementById(`${id}-gas`).innerText = (env.environment.gas_ohms / 1000).toFixed(1);
+                    }
+
+                    if (motion && motion.motion && motion.motion.total_accel_m_s2 !== null) {
+                        const accelValue = motion.motion.total_accel_m_s2;
+                        document.getElementById(`${id}-accel`).innerText = accelValue.toFixed(2);
+
+                        // ---- DETEKCJA ZDERZEŃ ----
+                        if (accelValue > COLLISION_THRESHOLD) {
+                            triggerCollisionAlert(id, accelValue);
+                        }
+
+                        if (document.getElementById(`${id}-vel`)) {
+                            document.getElementById(`${id}-vel`).innerText = motion.motion.total_velocity_km_h.toFixed(2);
+                            document.getElementById(`${id}-dist`).innerText = motion.motion.total_position_m.toFixed(2);
+                            document.getElementById(`${id}-gyr`).innerText = motion.motion.total_gyro_rad_s.toFixed(2);
+                        }
+                    }
+
+                    if (motion && motion.compass && motion.compass.detected && motion.compass.heading_deg !== null) {
+                        document.getElementById(`${id}-heading`).innerText = motion.compass.heading_deg;
+                        const needle = document.getElementById(`compass-needle-${id}`);
+                        if (needle) needle.style.transform = `rotate(${motion.compass.heading_deg}deg)`;
+                    }
+
+                } catch (e) {
+                    console.error("Błąd przetwarzania danych z WebSocket:", e);
+                }
+            };
+
+            ws.onerror = function(err) {
+                console.error(`[WS Błąd] Pociąg: ${id}`, err);
+            };
+
+            ws.onclose = function() {
+                console.warn(`[WS Zamknięto] Rozłączono z pociągiem: ${id}. Ponowna próba za 3s...`);
+                setTimeout(() => {
+                    if (activeTrainId === id) initTelemetryWebSocket(raspUrl, id);
+                }, 3000);
+            };
+        }
+
+        // ==========================================
+        // LOGIKA KOKPITU
+        // ==========================================
+        function expandPanel(id) {
+            if (activeTrainId === id) return;
+            activeTrainId = id;
+
+            document.getElementById(`mini-view-${id}`).classList.add('hidden');
+            document.getElementById(`mini-view-${id}`).classList.remove('flex');
+            document.getElementById(`full-view-${id}`).classList.remove('hidden');
+            document.getElementById(`full-view-${id}`).classList.add('flex');
+
+            document.getElementById(`train-wrapper-${id}`).classList.add('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
+            document.getElementById(`train-wrapper-${id}`).classList.remove('border-gray-700');
+
+            setTimeout(adjustDashboardScale, 50);
+
+            // Otwórz WebSocket po rozwinięciu panelu
+            const t = sysConfig.trains[id];
+            if (t && t.rasp_url) {
+                initTelemetryWebSocket(t.rasp_url, id);
+            }
+
+            const img = document.getElementById(`cam-img-${id}`);
+            if (img && img.dataset.src) {
+                if (!img.src || img.src === window.location.href) {
+                    img.src = img.dataset.src;
+                    img.classList.remove('hidden');
+                    document.getElementById(`cam-placeholder-${id}`).classList.add('hidden');
+                }
+            }
+        }
+
+        function collapsePanel(id) {
+            if (activeTrainId === id) activeTrainId = null;
+
+            document.getElementById(`full-view-${id}`).classList.add('hidden');
+            document.getElementById(`full-view-${id}`).classList.remove('flex');
+            document.getElementById(`mini-view-${id}`).classList.remove('hidden');
+            document.getElementById(`mini-view-${id}`).classList.add('flex');
+
+            document.getElementById(`train-wrapper-${id}`).classList.remove('border-blue-500/50', 'shadow-[0_0_20px_rgba(59,130,246,0.3)]');
+            document.getElementById(`train-wrapper-${id}`).classList.add('border-gray-700');
+
+            setTimeout(adjustDashboardScale, 50);
+
+            const img = document.getElementById(`cam-img-${id}`);
+            if (img) img.src = "";
+
+            // Zamknij WebSocket po zwinięciu panelu, by oszczędzać zasoby
+            if (telemetrySockets[id]) {
+                console.log(`[WS] Zamykanie połączenia dla pociągu: ${id} (panel zwinięty)`);
+                telemetrySockets[id].close();
+                delete telemetrySockets[id];
+            }
+        }
+
         async function resetSensors(id, raspUrl, btn) {
             if (!raspUrl) return;
             const originalText = btn.innerText;
@@ -475,58 +541,6 @@
                 btn.innerText = originalText;
                 btn.disabled = false;
             }, 2000);
-        }
-
-        async function fetchRaspData() {
-            if (!sysConfig || !sysConfig.trains || !activeTrainId) return;
-
-            const id = activeTrainId;
-            const t = sysConfig.trains[id];
-
-            if (!t || !t.rasp_url) return;
-
-            try {
-                const [resEnv, resMotion] = await Promise.all([
-                    fetch(`${t.rasp_url}/api/telemetry/env`).catch(() => null),
-                    fetch(`${t.rasp_url}/api/telemetry/motion`).catch(() => null)
-                ]);
-
-                if (resEnv && resEnv.ok) {
-                    const env = await resEnv.json();
-                    if (env.environment.temperature_c !== null) {
-                        document.getElementById(`${id}-temp`).innerText = env.environment.temperature_c;
-                        document.getElementById(`${id}-hum`).innerText = env.environment.humidity_percent;
-                        document.getElementById(`${id}-pres`).innerText = Math.round(env.environment.pressure_hpa);
-                        document.getElementById(`${id}-gas`).innerText = (env.environment.gas_ohms / 1000).toFixed(1);
-                    }
-                }
-
-                if (resMotion && resMotion.ok) {
-                    const motion = await resMotion.json();
-                    if (motion.motion.total_accel_m_s2 !== null) {
-                        const accelValue = motion.motion.total_accel_m_s2;
-                        document.getElementById(`${id}-accel`).innerText = accelValue.toFixed(2);
-
-                        // ---- DETEKCJA ZDERZEŃ ----
-                        if (accelValue > COLLISION_THRESHOLD) {
-                            triggerCollisionAlert(id, accelValue);
-                        }
-                        // --------------------------
-
-                        if (document.getElementById(`${id}-vel`)) {
-                            document.getElementById(`${id}-vel`).innerText = motion.motion.total_velocity_km_h.toFixed(2);
-                            document.getElementById(`${id}-dist`).innerText = motion.motion.total_position_m.toFixed(2);
-                            document.getElementById(`${id}-gyr`).innerText = motion.motion.total_gyro_rad_s.toFixed(2);
-                        }
-                    }
-                    if (motion.compass.detected && motion.compass.heading_deg !== null) {
-                        document.getElementById(`${id}-heading`).innerText = motion.compass.heading_deg;
-
-                        const needle = document.getElementById(`compass-needle-${id}`);
-                        if (needle) needle.style.transform = `rotate(${motion.compass.heading_deg}deg)`;
-                    }
-                }
-            } catch (e) { }
         }
 
         async function control(id, action, param = '') {
@@ -544,15 +558,11 @@
 
                 if (data.logs.length > 0) {
                     const logsElement = document.getElementById('system-logs');
-                    // Przechowujemy stare krytyczne logi o zderzeniach (zawierające emoji ostrzeżenia)
                     const oldCriticalLogs = Array.from(logsElement.children)
                         .map(li => li.outerHTML)
                         .filter(html => html.includes('⚠️ ALARM KRYTYCZNY'));
 
-                    // Nadpisujemy logi nowymi od dyspozytora
                     const newLogs = data.logs.map(l => `<li>> ${l}</li>`).join('');
-
-                    // Łączymy krytyczne logi z tymi od serwera
                     logsElement.innerHTML = oldCriticalLogs.join('') + newLogs;
                 }
 
@@ -609,7 +619,6 @@
                         if (devTools) devTools.classList.add('hidden');
                     }
 
-                    // Ignorujemy zmianę nazwy na ROZŁĄCZONY jeśli aktualnie jest status KRYTYCZNE ZDERZENIE (zostaje czerwony box)
                     if (statusEl && !statusEl.innerText.includes("KRYTYCZNE")) {
                         statusEl.innerText = text; statusEl.className = cls;
                     }
