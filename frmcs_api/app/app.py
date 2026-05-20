@@ -10,6 +10,8 @@ from pathlib import Path
 
 from app.lego_train import LegoTrain
 from app.dispatcher import ZoneDispatcher, SystemLogger
+from app.config import TRAINS_CONFIG
+
 
 # --- CONFIG & ENV ---
 load_dotenv(Path(__file__).resolve().parent / ".env.local")
@@ -22,6 +24,9 @@ trains = {
     "express": LegoTrain("Express", os.getenv("EXPRESS_MAC", ""), "express"),
     "cargo": LegoTrain("Cargo", os.getenv("CARGO_MAC", ""), "cargo")
 }
+
+trains["express"].telemetry_url = os.getenv("EXPRESS_URL", "")
+trains["cargo"].telemetry_url = os.getenv("CARGO_URL", "")
 
 class SpeedRequest(BaseModel):
     speed: int
@@ -66,6 +71,9 @@ async def disconnect_train(train_id: str):
 async def get_train_position(train_id: str):
     if train_id not in trains: return {"status": "error", "message": "Not found"}
     train = trains[train_id]
+
+    camera_url = TRAINS_CONFIG.get(train_id, {}).get("rasp_url", "")
+
     return {
         "status": "success",
         "data": {
@@ -75,7 +83,24 @@ async def get_train_position(train_id: str):
             "connected": train.is_connected,
             "speed": train.speed,
             "section": train.section,
-            "rgb": train.rgb
+            "rgb": train.rgb,
+            "telemetry_url": train.telemetry_url
+        }
+    }
+
+@app.get("/config")
+async def get_api_config():
+    """Endpoint wymagany przez tablicę dworcową i system audio"""
+    return {
+        "trains": {
+            "express": {"name": "Express"},
+            "cargo": {"name": "Cargo"}
+        },
+        "colors": {
+            "S1": {"zone_id": 1, "label": "BLUE"},
+            "S2": {"zone_id": 2, "label": "GREEN"},
+            "S3": {"zone_id": 3, "label": "ORANGE"},
+            "S4": {"zone_id": 4, "label": "WHITE"}
         }
     }
 
@@ -87,10 +112,14 @@ async def get_system_status():
             tid: {
                 "connected": t.is_connected,
                 "speed": t.speed,
-                "section": t.section
+                "section": t.section,
+                "telemetry_url": t.telemetry_url
             } for tid, t in trains.items()
         },
-        "zones": {z_id: occ for z_id, occ in dispatcher.zones.items()}
+        "zones": {
+            z_id: (occ.name if hasattr(occ, 'name') else occ) if occ else None 
+            for z_id, occ in dispatcher.zones.items()
+        },
     }
 
 @app.post("/{train_id}/speed")
