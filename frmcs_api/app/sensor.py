@@ -44,7 +44,7 @@ class ColorDetector:
         return None
 
     def process_notification(self, data):
-        if len(data) >= 5 and data[2] == 0x04 and data[5] == 0x3d:
+        if len(data) >= 6 and data[2] == 0x04 and data[5] == 0x3d:
             detected_port = data[3]
             print(f"[!] HARDWARE DETECTED: Port {detected_port} for {self.train.name}")
             self.port_id = detected_port
