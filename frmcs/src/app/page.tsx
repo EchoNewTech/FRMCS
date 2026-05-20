@@ -11,18 +11,28 @@ export default function Page() {
 
   useEffect(() => {
     setMounted(true);
-    const interval = setInterval(getStatus, 1000);
+    const interval = setInterval(getStatus, 2000); // zmiana
     return () => clearInterval(interval);
   }, []);
 
   const getStatus = async () => {
     try {
-      const res = await fetch(`${API}/status`);
+      // Stop after 1000 if Bluetooth blocks server
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1000);
+
+      const res = await fetch(`${API}/status`, {
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+
       if (!res.ok) throw new Error("Backend connection failed");
       const data = await res.json();
       setStatus(data);
     } catch (err: any) {
-      console.error(err.message);
+       console.error(err.message);
     }
   };
 
@@ -65,13 +75,13 @@ export default function Page() {
       {/* DZIENNIK DYSPOZYTORA (LOGI) */}
       <div className="mt-8 bg-black/40 p-4 rounded-xl border border-gray-700 shadow-inner">
         <h3 className="text-gray-500 text-xs font-bold mb-3 uppercase tracking-widest flex items-center">
-          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse mr-2"></span> Dispatcher Logs
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse mr-2"></span> Dispatcher Logs
         </h3>
         <ul className="text-sm font-mono text-blue-300 space-y-1 h-32 overflow-y-auto pl-2">
-          {status.logs?.map((log: string, i: number) => (
-            <li key={i} className="border-l border-blue-900 pl-2 opacity-90">{`> ${log}`}</li>
-          ))}
-          {(!status.logs || status.logs.length === 0) && <li className="text-gray-600">No logs available...</li>}
+            {status.logs?.map((log: string, i: number) => (
+                <li key={i} className="border-l border-blue-900 pl-2 opacity-90">{`> ${log}`}</li>
+            ))}
+            {(!status.logs || status.logs.length === 0) && <li className="text-gray-600">No logs available...</li>}
         </ul>
       </div>
     </div>
