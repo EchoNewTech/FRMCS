@@ -1,5 +1,6 @@
 import asyncio
 import time
+import threading
 from pathlib import Path
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
@@ -36,47 +37,73 @@ trains = {
     tid: LegoTrain(tinfo["name"], tinfo["mac"]) for tid, tinfo in TRAINS_CONFIG.items()
 }
 
+# CONFIG: Pin GPIO, do którego podłączony jest przewód SIG głośnika Grove (rekomendowany GPIO 18 dla sprzętowego PWM)
+SPEAKER_PIN = 18
+
 # ========================================================
 # CONTROLLER SPRZĘTOWY: GŁOŚNIK I WYŚWIETLACZ GROVE
 # ========================================================
 class HardwareStationHUD:
     def __init__(self):
         self.oled = None
+        self.pwm = None
         
-        # 1. Inicjalizacja Ekranu OLED przez I2C
         if adafruit_ssd1306:
             try:
                 i2c = busio.I2C(board.SCL, board.SDA)
-                self.oled = adafruit_ssd1306.SSD1306_I2C(128, 64, i2c)
-                self.oled.fill(0)
+                # Używamy standardowego adresu 0x3C. Jeśli i2cdetect pokazał 3d, zmień parametr poniżej.
+                self.oled = adafruit_ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
+                
+                # --- EKRAN STARTOWY ---
+                image = Image.new("1", (self.oled.width, self.oled.height))
+                draw = ImageDraw.Draw(image)
+                font = ImageFont.load_default()
+                draw.text((20, 20), "SYSTEM FRMCS", font=font, fill=255)
+                draw.text((20, 35), "URUCHAMIANIE...", font=font, fill=255)
+                self.oled.image(image)
                 self.oled.show()
-                print("[HARDWARE] Wyświetlacz Grove OLED zainicjalizowany.")
+                print("[HARDWARE] Wyświetlacz Grove OLED zainicjalizowany (Adres 0x3C).")
             except Exception as e:
-                print(f"[HARDWARE] Brak ekranu OLED lub błąd I2C: {e}")
-                
-        # 2. Inicjalizacja Głośnika (przez wyjście audio Jack/HDMI/USB w Raspberry Pi)
-        try:
-            pygame.mixer.init()
-            print("[HARDWARE] Mikser audio (Pygame) zainicjalizowany.")
-        except Exception as e:
-            print(f"[HARDWARE] Błąd inicjalizacji audio: {e}")
-
-    def play_gong(self):
-        """Odtwarza prawdziwy plik MP3 z gongiem PKP w tle."""
-        def run_gong():
+                print(f"[HARDWARE] Brak ekranu OLED lub błąd I2C: {e}")                
+        # 2. Inicjalizacja Głośnika Grove (PWM przez RPi.GPIO)
+        if GPIO:
             try:
-                # Wczytanie i odtworzenie pliku MP3
-                pygame.mixer.music.load("gong.wav")
-                pygame.mixer.music.play()
-                
-                # Czekamy aż dźwięk przestanie grać, żeby wątek nie zgasł za wcześnie
-                while pygame.mixer.music.get_busy():
-                    time.sleep(0.1)
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setup(SPEAKER_PIN, GPIO.OUT)
+                # Inicjalizacja PWM z częstotliwością startową 440Hz
+                self.pwm = GPIO.PWM(SPEAKER_PIN, 440)
+                self.pwm.start(0)  # 0% wypełnienia (Duty Cycle) oznacza całkowitą ciszę
+                print("[HARDWARE] Sprzętowy głośnik Grove (PWM) zainicjalizowany.")
             except Exception as e:
-                print(f"[AUDIO BŁĄD] Nie można odtworzyć gong.wav: {e}")
+                print(f"[HARDWARE] Błąd inicjalizacji głośnika PWM: {e}")
+
+    def play_ding_dong(self):
+        """Generuje 3 sprzętowe tony (G4, C5, E5) charakterystyczne dla polskich dworców."""
+        if not self.pwm: 
+            return
+
+        def _play():
+            try:
+                # Ton 1: G4 (392.00 Hz)
+                self.pwm.ChangeFrequency(392.00)
+                self.pwm.ChangeDutyCycle(50)  # Uruchomienie fali prostokątnej (50% głośności)
+                time.sleep(0.6)
+                
+                # Ton 2: C5 (523.25 Hz)
+                self.pwm.ChangeFrequency(523.25)
+                time.sleep(0.6)
+                
+                # Ton 3: E5 (659.25 Hz)
+                self.pwm.ChangeFrequency(659.25)
+                time.sleep(1.2)
+                
+                # Koniec sekwencji - powrót do ciszy
+                self.pwm.ChangeDutyCycle(0)
+            except Exception as e:
+                print(f"[AUDIO BŁĄD] Wystąpił problem podczas generowania tonów PWM: {e}")
             
-        # Odpalamy w tle, żeby nie blokować głównego serwera FastAPI!
-        asyncio.get_event_loop().run_in_executor(None, run_gong)
+        # Odpalamy dźwięk w tle (w osobnym wątku), żeby nie zablokować głównego serwera FastAPI i pętli asyncio!
+        threading.Thread(target=_play, daemon=True).start()
 
     def update_display(self, zones_data):
         """Rysuje aktualny rozkład i zajętość stref na ekranie OLED."""
@@ -123,6 +150,9 @@ async def lifespan(_: FastAPI):
             await t.set_speed(0)
             await t.client.disconnect()
     if GPIO:
+        # Wyłączenie generatora PWM i czyszczenie pinów przy zamykaniu aplikacji
+        if hw_hud.pwm:
+            hw_hud.pwm.stop()
         GPIO.cleanup()
 
 app = FastAPI(lifespan=lifespan)
@@ -252,9 +282,10 @@ async def api_status():
     if current_zones != _last_known_zones:
         hw_hud.update_display(current_zones)
         
+        # Sprawdzamy, czy w jakiejś strefie pojawił się nowy pociąg (którego wcześniej tam nie było)
         for z_id, occupant in current_zones.items():
             if occupant and _last_known_zones.get(z_id) != occupant:
-                hw_hud.play_gong()
+                hw_hud.play_ding_dong()  # Odpalenie fizycznego gongu PWM
                 break
                 
         _last_known_zones = current_zones.copy()

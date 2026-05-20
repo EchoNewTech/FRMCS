@@ -89,14 +89,8 @@
         // LOGIKA AUTOSTARTU DŹWIĘKU
         // ----------------------------------------------------
         window.addEventListener('DOMContentLoaded', () => {
-            const utter = new SpeechSynthesisUtterance("");
-            window.speechSynthesis.speak(utter);
-
             setTimeout(() => {
                 playDingDong();
-                setTimeout(() => {
-                    speak("System informacji pasażerskiej uruchomiony pomyślnie.");
-                }, 1500);
             }, 1000);
         });
 
@@ -119,18 +113,26 @@
                 const gain = ctx.createGain();
                 osc.connect(gain);
                 gain.connect(ctx.destination);
-                osc.type = "sine";
+                
+                osc.type = "sine"; // Czysty ton (sinusoida)
                 osc.frequency.setValueAtTime(freq, ctx.currentTime + time);
-                gain.gain.setValueAtTime(0.5, ctx.currentTime + time);
-                gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + time + duration);
+                
+                // Obwiednia dźwięku: błyskawiczne narastanie (uderzenie) i powolny spadek (rezonans)
+                gain.gain.setValueAtTime(0, ctx.currentTime + time);
+                gain.gain.linearRampToValueAtTime(0.6, ctx.currentTime + time + 0.03); 
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + time + duration);
+                
                 osc.start(ctx.currentTime + time);
                 osc.stop(ctx.currentTime + time + duration);
             }
 
-            playTone(659.25, 0, 1.5);    // Nuta E5
-            playTone(523.25, 0.6, 2.0);  // Nuta C5
+            // Trzy tony charakterystyczne dla polskich dworców (G4, C5, E5)
+            playTone(392.00, 0.0, 2.5); // Niski ton
+            playTone(523.25, 0.6, 2.5); // Średni ton
+            playTone(659.25, 1.2, 3.5); // Wysoki ton (wybrzmiewa najdłużej)
         }
 
+        
         // ----------------------------------------------------
         // SYNTEZATOR MOWY
         // ----------------------------------------------------
@@ -190,9 +192,6 @@
 
                         if (previousZones[z_id] !== occupant) {
                             playDingDong();
-                            setTimeout(() => {
-                                speak(`Bim bom. Uwaga podróżni. Pociąg, ${occupant}, wjechał na, ${spokenZoneLabel}. Prosimy zachować ostrożność.`);
-                            }, 1500);
                         }
                     }
 

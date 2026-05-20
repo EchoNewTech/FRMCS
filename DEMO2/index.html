@@ -315,26 +315,20 @@
                                         </h4>
                                         ${resetBtnHtml}
                                     </div>
-                                    <div class="flex items-center justify-between metallic-panel p-2 rounded flex-1">
-                                        
-                                        <div class="grid grid-cols-2 gap-x-2 gap-y-1 w-full pr-2">
-                                            <div id="accel-box-${id}" class="flex flex-col transition-colors duration-200 p-1 rounded">
-                                                <span class="text-[7px] text-gray-400 uppercase">Wibracje</span>
-                                                <div class="text-green-400 font-mono"><span id="${id}-accel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m/s²</span></div>
-                                            </div>
-                                            <div class="flex flex-col p-1">
-                                                <span class="text-[7px] text-gray-400 uppercase">Prędkość</span>
-                                                <div class="text-blue-400 font-mono"><span id="${id}-vel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">km/h</span></div>
-                                            </div>
-                                            <div class="flex flex-col p-1">
-                                                <span class="text-[7px] text-gray-400 uppercase">Dystans</span>
-                                                <div class="text-purple-400 font-mono"><span id="${id}-dist" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m</span></div>
-                                            </div>
-                                            <div class="flex flex-col p-1">
-                                                <span class="text-[7px] text-gray-400 uppercase">Rotacja</span>
-                                                <div class="text-teal-400 font-mono"><span id="${id}-gyr" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">rad/s</span></div>
-                                            </div>
+                                    <div class="flex flex-col justify-center gap-2 w-full pr-4 border-r border-gray-700/30 mr-2">
+                                        <div id="accel-box-${id}" class="flex justify-between items-end border-b border-gray-700/50 pb-1">
+                                            <span class="text-[8px] text-gray-400 uppercase">Wibracje</span>
+                                            <div class="text-green-400 font-mono"><span id="${id}-accel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">m/s²</span></div>
                                         </div>
+                                        <div class="flex justify-between items-end border-b border-gray-700/50 pb-1">
+                                            <span class="text-[8px] text-gray-400 uppercase">Prędkość</span>
+                                            <div class="text-blue-400 font-mono"><span id="${id}-vel" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">km/h</span></div>
+                                        </div>
+                                        <div class="flex justify-between items-end">
+                                            <span class="text-[8px] text-gray-400 uppercase">Rotacja</span>
+                                            <div class="text-teal-400 font-mono"><span id="${id}-gyr" class="text-base font-bold">--</span><span class="text-[8px] text-gray-500 ml-0.5">rad/s</span></div>
+                                        </div>
+                                    </div>
                                         
                                         <div class="flex flex-col items-center justify-center">
                                             <div class="relative w-12 h-12 rounded-full border-2 border-gray-600 bg-black shadow-[inset_0_0_8px_rgba(0,0,0,1)]">
@@ -442,7 +436,6 @@
 
                         if (document.getElementById(`${id}-vel`)) {
                             document.getElementById(`${id}-vel`).innerText = motion.motion.total_velocity_km_h.toFixed(2);
-                            document.getElementById(`${id}-dist`).innerText = motion.motion.total_position_m.toFixed(2);
                             document.getElementById(`${id}-gyr`).innerText = motion.motion.total_gyro_rad_s.toFixed(2);
                         }
                     }

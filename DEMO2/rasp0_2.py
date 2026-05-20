@@ -460,5 +460,4 @@ if __name__ == "__main__":
     print(f" PANEL KONTROLNY AKTYWNY")
     print(f" ADRES: http://{ip}:8002")
     print("-" * 50)
-    # Wyłączenie logów uvicorn dla czystości konsoli
     uvicorn.run(app, host="0.0.0.0", port=8002, access_log=False)
