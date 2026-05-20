@@ -3,104 +3,125 @@ from app.config import COLORS_CONFIG
 from app.constants import LEGO_HUB_CHARACTERISTIC
 
 class ColorDetector:
-    def __init__(self, train, dispatcher=None, port_id=0x01):
+    def __init__(self, train, dispatcher, port_id=0x01):
         self.train = train
         self.dispatcher = dispatcher
         self.port_id = port_id
         self.last_color_code = None
-        self.status_text = "DRIVING"
-        self.is_processing = False
+        self.last_rgb =  {"r": 0, "g": 0, "b": 0}
+        self.is_processing_stop = False
+        self.is_processing_slow = False # NOWA FLAGA DLA ZWOLNIENIA
 
     async def setup_sensor(self):
+        """Activates RGB Mode 5 on the color sensor."""
         if not self.train.client or not self.train.client.is_connected:
             return False
-        # Aktywacja sensora
+
         payload = bytearray([0x0A, 0x00, 0x41, self.port_id, 0x05, 0x05, 0x00, 0x00, 0x00, 0x01])
         await self.train.client.write_gatt_char(LEGO_HUB_CHARACTERISTIC, payload)
+        print(f"[{self.train.name}] Sensor Activated (Mode RGB). Port {self.port_id}")
 
-    def decode_rgb(self, r, g, b):
-        # Najpierw AKCJE (Stop, Slow)
+    def decode_rgb_to_lego_color(self, r, g, b):
+        if r < 20 and g < 20 and b < 20:
+            return None
+
         priority = ["ST", "SL"]
         for code in priority:
-            if code in COLORS_CONFIG:
-                cfg = COLORS_CONFIG[code]
-                rng = cfg["rgb_range"]
-                if (rng["r"][0] <= r <= rng["r"][1] and 
-                    rng["g"][0] <= g <= rng["g"][1] and 
-                    rng["b"][0] <= b <= rng["b"][1]):
+            if code in COLORS_CONFIG and "rgb_range" in COLORS_CONFIG[code]:
+                ranges = COLORS_CONFIG[code]["rgb_range"]
+                if (ranges["r"][0] <= r <= ranges["r"][1] and 
+                    ranges["g"][0] <= g <= ranges["g"][1] and 
+                    ranges["b"][0] <= b <= ranges["b"][1]):
                     return code
-        
-        # Potem STREFY
+
         for code, cfg in COLORS_CONFIG.items():
-            if code in priority: continue
-            if "rgb_range" in cfg:
-                rng = cfg["rgb_range"]
-                if (rng["r"][0] <= r <= rng["r"][1] and 
-                    rng["g"][0] <= g <= rng["g"][1] and 
-                    rng["b"][0] <= b <= rng["b"][1]):
-                    return code
+            if code in priority or "rgb_range" not in cfg: continue
+            ranges = cfg["rgb_range"]
+            if (ranges["r"][0] <= r <= ranges["r"][1] and 
+                ranges["g"][0] <= g <= ranges["g"][1] and 
+                ranges["b"][0] <= b <= ranges["b"][1]):
+                return code
         return None
 
     def process_notification(self, data):
-        # Sprawdzamy port i typ danych (0x45)
-        if len(data) >= 10 and data[2] == 0x45 and data[3] == self.port_id:
-            r = data[4] + (data[5] << 8)
-            g = data[6] + (data[7] << 8)
-            b = data[8] + (data[9] << 8)
-            
-            # Zawsze aktualizuj RGB, żeby na wykresach było widać ruch
-            self.train.rgb = {"r": r, "g": g, "b": b}
+        if len(data) >= 5 and data[2] == 0x04 and data[5] == 0x3d:
+            detected_port = data[3]
+            print(f"[!] HARDWARE DETECTED: Port {detected_port} for {self.train.name}")
+            self.port_id = detected_port
+            asyncio.create_task(self.setup_sensor())
+            return
 
-            color_code = self.decode_rgb(r, g, b)
+        if len(data) >= 10 and data[2] == 0x45 and data[3] == self.port_id:
+            r = min(255, int((data[4] + (data[5] << 8)) / 4))
+            g = min(255, int((data[6] + (data[7] << 8)) / 4))
+            b = min(255, int((data[8] + (data[9] << 8)) / 4))
+
+            self.last_rgb = {"r": r, "g": g, "b": b} 
+            color_code = self.decode_rgb_to_lego_color(r, g, b)
             
-            # Jeśli kolor się zmienił (np. wjechał na niebieski lub zjechał z niego na tory)
             if color_code != self.last_color_code:
                 self.last_color_code = color_code
-                
-                if color_code:
-                    # Wykryto konkretną strefę lub akcję
+                if color_code is not None:
                     asyncio.create_task(self.handle_color(color_code))
-                else:
-                    # Brak koloru (tory) - wracamy do DRIVING tylko jeśli nie trwa akcja STOP
-                    if not self.is_processing:
-                        self.status_text = "DRIVING"
-                        self.train.section = "DRIVING"
-
+                    
     async def handle_color(self, code):
-        if self.is_processing: return
-        cfg = COLORS_CONFIG.get(code)
-        if not cfg: return
-        
-        role = cfg.get("role")
-        
-        if role == "action":
-            self.is_processing = True
-            try:
-                prev_speed = self.train.speed
-                action = cfg.get("action")
+        try:
+            cfg = COLORS_CONFIG.get(code)
+            if not cfg: return
+
+            role = cfg.get("role")
+            
+            if role == "action":
+                if cfg["action"] == "stop":
+                    if self.is_processing_stop: return
+                    self.is_processing_stop = True
+                    
+                    try:
+                        duration = cfg.get("duration")
+                        captured_speed = self.train.speed
+                        
+                        self.dispatcher.log(f"[STOP] {self.train.name}: Stopped at {cfg['label']}.")
+                        
+                        await self.train.send_speed(0)
+                        await asyncio.sleep(duration)
+                        
+                        if self.train not in self.dispatcher.waiting_trains:
+                            await self.train.send_speed(captured_speed)
+                    finally:
+                        self.is_processing_stop = False
+
+                elif cfg["action"] == "slow":
+                    # BLOKADA: Jeśli już zwalnia, ignoruj kolejne sygnały brązowe
+                    if self.is_processing_slow: return
+                    self.is_processing_slow = True
+                    
+                    try:
+                        duration = cfg.get("duration")
+                        speed_limit = cfg.get("speed_limit")
+                        captured_speed = self.train.speed
+
+                        if abs(captured_speed) > speed_limit:
+                            self.dispatcher.log(f"[LIMIT] {self.train.name}: Slowing down ({cfg['label']}).")
+                            
+                            new_speed = speed_limit if captured_speed > 0 else -speed_limit
+                            await self.train.send_speed(new_speed)
+                            
+                            await asyncio.sleep(duration)
+                            
+                            # KLUCZOWE: Przywróć poprzednią prędkość TYLKO, jeśli pociąg nie stanął na czerwonym,
+                            # nie został zablokowany przez dyspozytora i... UŻYTKOWNIK NIE ZMIENIŁ PRĘDKOŚCI RĘCZNIE!
+                            if not self.is_processing_stop and self.train not in self.dispatcher.waiting_trains:
+                                if self.train.speed == new_speed:
+                                    await self.train.send_speed(captured_speed) 
+                    finally:
+                        self.is_processing_slow = False
+
+            elif role == "zone":
+                zone_id = cfg["zone_id"]
+                label = cfg.get("label", f"ZONE {zone_id}")
                 
-                if action == "stop":
-                    self.status_text = f"STOP ({cfg['duration']}s)"
-                    self.train.section = self.status_text
-                    await self.train.stop()
-                    await asyncio.sleep(cfg['duration'])
-                    await self.train.send_speed(prev_speed)
-                
-                elif action == "slow":
-                    limit = cfg['speed_limit']
-                    self.status_text = f"SLOW ({limit}%)"
-                    self.train.section = self.status_text
-                    await self.train.send_speed(limit if prev_speed > 0 else -limit)
-                    await asyncio.sleep(cfg['duration'])
-                    await self.train.send_speed(prev_speed)
-                
-                self.status_text = "DRIVING"
-                self.train.section = "DRIVING"
-            finally:
-                self.is_processing = False
+                self.train.section = f"ZONE {zone_id} ({label})"
+                await self.dispatcher.request_entry(self.train, zone_id)
         
-        elif role == "zone" and self.dispatcher:
-            # Strefy nie blokują sensora flagą is_processing
-            self.status_text = f"ZONE {cfg['zone_id']}"
-            self.train.section = self.status_text
-            await self.dispatcher.request_entry(self.train, cfg["zone_id"])
+        except Exception as e:
+            self.dispatcher.log(f"[ERROR] Color {code} - {str(e)}")
