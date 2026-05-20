@@ -13,37 +13,23 @@ class LegoTrain:
 
     @property
     def is_connected(self):
-        # BleakClient może istnieć, ale nie być połączony - to musimy sprawdzać
         return self.client is not None and self.client.is_connected
 
     async def connect(self, dispatcher=None):
         if self.is_connected: return
         async with ble_lock:
-            print(f"[{self.name}] Connecting to {self.mac}...")
-            for attempt in range(3):
-                try:
-                    self.client = BleakClient(self.mac)
-                    await self.client.connect(timeout=20.0)
-                    
-                    # Po połączeniu od razu startujemy powiadomienia
-                    await self.client.start_notify(LEGO_HUB_CHARACTERISTIC, self.notification_handler)
-                    await asyncio.sleep(1.0)
-                    
-                    self.detector = ColorDetector(self, dispatcher)
-                    await self.detector.setup_sensor()
-                    
-                    self.section = "DRIVING"
-                    print(f"[{self.name}] Connected successfully.")
-                    break
-                except Exception as e:
-                    print(f"[{self.name}] Attempt {attempt + 1} failed: {e}")
-                    if self.client:
-                        await self.client.disconnect()
-                    self.client = None # CZYŚCIMY, żeby is_connected było False
-                    if attempt == 2:
-                        self.section = "ERROR"
-                        raise e
-                    await asyncio.sleep(2)
+            try:
+                self.client = BleakClient(self.mac)
+                await self.client.connect(timeout=20.0)
+                self.detector = ColorDetector(self, dispatcher)
+                await self.client.start_notify(LEGO_HUB_CHARACTERISTIC, self.notification_handler)
+                # Query attached I/O to trigger sensor discovery
+                await self.client.write_gatt_char(LEGO_HUB_CHARACTERISTIC, bytearray([0x05, 0x00, 0x01, 0x01, 0x05]))
+                self.section = "INITIALIZING"
+                print(f"[{self.name}] Bluetooth link established. Waiting for sensor...")
+            except Exception as e:
+                self.client = None
+                raise e
 
     async def disconnect(self):
         self.detector = None
@@ -51,8 +37,7 @@ class LegoTrain:
             try:
                 await self.send_speed(0)
                 await self.client.disconnect()
-            except:
-                pass
+            except: pass
         self.client, self.section = None, "DISCONNECTED"
 
     def notification_handler(self, sender, data):
@@ -61,10 +46,19 @@ class LegoTrain:
 
     async def send_speed(self, speed: int):
         if not self.is_connected: return
-        self.speed = max(-100, min(100, speed))
-        speed_val = int(self.speed).to_bytes(1, byteorder="little", signed=True)[0]
-        payload = bytearray([0x08, 0x00, 0x81, 0x00, 0x11, 0x51, 0x00, speed_val])
-        await self.client.write_gatt_char(LEGO_HUB_CHARACTERISTIC, payload)
+        try:
+            self.speed = max(-100, min(100, speed))
+            speed_val = int(self.speed).to_bytes(1, byteorder="little", signed=True)[0]
+            payload = bytearray([0x08, 0x00, 0x81, 0x00, 0x11, 0x51, 0x00, speed_val])
+            
+            # Timeout set to prevent hanging, but we do NOT drop connection on a single failure
+            await asyncio.wait_for(
+                self.client.write_gatt_char(LEGO_HUB_CHARACTERISTIC, payload),
+                timeout=0.5
+            )
+        except Exception:
+            # Silent failure: BLE dropped a packet. We log it gently without forcing a full disconnect.
+            print(f"[{self.name}] Warning: Speed command timed out (BLE lag).")
 
     async def stop(self):
         await self.send_speed(0)
