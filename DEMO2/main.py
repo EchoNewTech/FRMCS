@@ -160,7 +160,7 @@ async def api_status():
             "color_text": t.detector.status_text if getattr(t, 'detector', None) else "BRAK_INFO",
             "ui_color": ui_color,
             "connection": conn_type,
-            "rgb": rgb_data  # <--- NOWA LINIA: Wysyłamy RGB do HTMLa
+            "rgb": rgb_data 
         }
     return data
 
