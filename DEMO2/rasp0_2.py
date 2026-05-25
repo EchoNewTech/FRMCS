@@ -10,16 +10,9 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-# Próby importu bibliotek sprzętowych
-try:
-    import adafruit_bme680
-except ImportError:
-    adafruit_bme680 = None
-
-try:
-    from adafruit_lsm6ds.lsm6ds3 import LSM6DS3
-except ImportError:
-    LSM6DS3 = None
+# import bibliotek sprzętowych
+import adafruit_bme680
+from adafruit_lsm6ds.lsm6ds3 import LSM6DS3
 
 class TelemetrySensors:
     def __init__(self):
