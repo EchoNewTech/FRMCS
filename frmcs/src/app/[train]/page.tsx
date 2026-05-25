@@ -110,7 +110,6 @@ export default function TrainPage() {
       }
     } catch (err: any) {
       console.log(`[UI] Polling skipped.`);
-    }
     } finally {
     statusRequestRunning.current = false;
   }

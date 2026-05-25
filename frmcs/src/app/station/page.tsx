@@ -104,7 +104,7 @@ export default function StationBoard() {
       playTone(659.25, 0, 1.2);  // Note E5
       playTone(523.25, 0.5, 1.6); // Note C5
     } catch (e) {
-      print("Audio context blocked by client interaction paradigm");
+      console.error("Audio context blocked by client interaction paradigm");
     }
   };
 
