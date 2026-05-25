@@ -18,12 +18,12 @@ TRAINS_CONFIG = {
     "express": {
         "name": "Express", 
         "mac": "9C:9A:C0:18:86:E1",
-        "rasp_url": "http://192.168.0.72:8001"  # <--- DODANE: Przypisanie Raspberry Pi 1 do Express
+        "rasp_url": "http://192.168.0.72:8000"  # <--- DODANE: Przypisanie Raspberry Pi 1 do Express
     },
     "cargo": {
         "name": "Cargo",   
         "mac": "9C:9A:C0:1A:7A:AF",
-        "rasp_url": f"http://{LOCAL_IP}:8002"   # <--- DODANE: Przypisanie Raspberry Pi 2 do Cargo
+        "rasp_url": "http://192.168.0.73:8000"   # <--- DODANE: Przypisanie Raspberry Pi 2 do Cargo
     }
 }
 

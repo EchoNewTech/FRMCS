@@ -6,11 +6,9 @@ import uvicorn
 import board
 import threading
 import asyncio
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-
-# import bibliotek sprzętowych
 import adafruit_bme680
 from adafruit_lsm6ds.lsm6ds3 import LSM6DS3
 
@@ -105,16 +103,24 @@ class TelemetrySensors:
                 ay_comp = ay - self.accel_offset[1]
                 az_comp = az - self.accel_offset[2]
                 
-                deadband = 0.35
+                deadband = 0.85 
                 ax_comp = 0.0 if abs(ax_comp) < deadband else ax_comp
                 ay_comp = 0.0 if abs(ay_comp) < deadband else ay_comp
                 az_comp = 0.0 if abs(az_comp) < deadband else az_comp
 
                 total_accel = math.sqrt(ax_comp**2 + ay_comp**2 + az_comp**2)
 
-                for i, val in enumerate([ax_comp, ay_comp, az_comp]):
-                    self.velocity[i] += val * dt
-                    self.velocity[i] *= 0.95 # Tłumienie dryftu
+                if total_accel == 0.0:
+                    for i in range(3):
+                        self.velocity[i] *= 0.60 
+                        if abs(self.velocity[i]) < 0.1:
+                            self.velocity[i] = 0.0
+                else:
+                    for i, val in enumerate([ax_comp, ay_comp, az_comp]):
+                        self.velocity[i] += val * dt
+                        self.velocity[i] *= 0.95 
+                
+                for i in range(3):
                     self.position[i] += self.velocity[i] * dt
 
                 total_vel = math.sqrt(sum(v**2 for v in self.velocity))
@@ -156,11 +162,9 @@ class BackgroundCameraWorker:
         self.process = None
 
     def start(self):
-        # Odpalamy wątek demona, który żyje niezależnie od FastAPI i opróżnia bufor
         threading.Thread(target=self._video_loop, daemon=True).start()
 
     def _video_loop(self):
-        # Rozdzielczość 320x240 oraz 10-12 FPS to maksimum dla stabilności na 1 rdzeniu RPi Zero W!
         cmd = [
             "rpicam-vid", "-t", "0", "--codec", "mjpeg", 
             "--width", "256", "--height", "144",
@@ -172,7 +176,6 @@ class BackgroundCameraWorker:
         
         while True:
             try:
-                # Czytamy mniejsze porcje (1KB zamiast 4KB) by natychmiast reagować i czyścić potok
                 chunk = self.process.stdout.read(1024)
                 if not chunk:
                     break
@@ -183,7 +186,6 @@ class BackgroundCameraWorker:
                     if start == -1:
                         break
                     
-                    # Jeśli na początku bufora zalegają śmieci z sieci, odrzucamy je
                     if start > 0:
                         buffer = buffer[start:]
                         start = 0
@@ -192,17 +194,14 @@ class BackgroundCameraWorker:
                     if end == -1:
                         break
                     
-                    # Nadpisujemy zmienną globalną NAJNOWSZĄ klatką. Stare są bezpowrotnie niszczone.
                     self.latest_frame = buffer[:end+2]
                     buffer = buffer[end+2:]
             except Exception:
                 break
 
-# Inicjalizacja i natychmiastowy start wątku w tle
 video_worker = BackgroundCameraWorker()
 video_worker.start()
 
-# Generator klatek zmieniony na ASYNCHRONICZNY dla FastAPI (zerowe zużycie zasobów)
 async def generate_frames():
     last_sent_frame = None
     while True:
@@ -210,20 +209,49 @@ async def generate_frames():
         if frame and frame != last_sent_frame:
             last_sent_frame = frame
             yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        # Śpimy 50ms (około 20Hz sprawdzania), co całkowicie odciąża procesor
         await asyncio.sleep(0.05)
+
 # ========================================================
+# NIEZALEŻNY WĄTEK TELEMETRII (ZOPTYMALIZOWANY DLA RPi Zero)
+# ========================================================
+class BackgroundTelemetryWorker:
+    def __init__(self, sensors_instance):
+        self.sensors = sensors_instance
+        self.latest_motion = {"motion": {}, "compass": {}}
+        self.latest_env = {"environment": {}}
+        self.running = True
+
+    def start(self):
+        threading.Thread(target=self._telemetry_loop, daemon=True).start()
+
+    def _telemetry_loop(self):
+        while self.running:
+            try:
+                self.latest_motion = self.sensors.get_motion_data()
+                self.latest_env = self.sensors.get_env_data()
+            except Exception as e:
+                pass
+            
+            # Odpytywanie fizyczne I2C z optymalną częstotliwością 20Hz
+            time.sleep(0.05) 
+
+sensors = TelemetrySensors()
+telemetry_worker = BackgroundTelemetryWorker(sensors)
+telemetry_worker.start()
 
 # --- SERWER ---
 app = FastAPI()
 
+# ROZWIĄZANIE PROBLEMU 403 FORBIDDEN: allow_credentials = False
 app.add_middleware(
-    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+    CORSMiddleware, 
+    allow_origins=["*"], 
+    allow_credentials=False, 
+    allow_methods=["*"], 
+    allow_headers=["*"]
 )
 
-sensors = TelemetrySensors()
-
-# --- TEMPLATKA INTERFEJSU (ZMNIEJSZONE ELEMENTY) ---
+# --- TEMPLATKA INTERFEJSU LOKALNEGO ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -235,13 +263,8 @@ HTML_TEMPLATE = """
     <style>
         body { background-color: #0a0a0c; }
         .video-container { 
-            position: relative; 
-            overflow: hidden; 
-            border-radius: 0.5rem; 
-            border: 1px solid #1f2937; 
-            background: #000; 
-            max-width: 540px; 
-            margin: 0 auto; 
+            position: relative; overflow: hidden; border-radius: 0.5rem; 
+            border: 1px solid #1f2937; background: #000; max-width: 540px; margin: 0 auto; 
         }
         .video-overlay { 
             position: absolute; top: 0; left: 0; width: 100%; height: 100%; 
@@ -263,7 +286,7 @@ HTML_TEMPLATE = """
     <header class="w-full max-w-5xl flex justify-between items-center mb-4 border-b border-gray-800 pb-2">
         <div class="flex items-center gap-3">
             <div class="w-2 h-2 rounded-full bg-red-600 animate-pulse"></div>
-            <h1 class="text-sm font-black tracking-widest uppercase text-green-500">System Telemetryczny v3.1</h1>
+            <h1 class="text-sm font-black tracking-widest uppercase text-green-500">System Telemetryczny v3.2 (WebSocket)</h1>
         </div>
         <div class="text-[10px] font-mono text-gray-500 uppercase">Status: Connected // Stream: Active</div>
     </header>
@@ -274,9 +297,7 @@ HTML_TEMPLATE = """
             <div class="video-container shadow-2xl">
                 <div class="scanline"></div>
                 <div class="video-overlay"></div>
-                <div class="absolute top-2 left-2 z-10 bg-black/60 px-2 py-0.5 rounded text-[9px] font-mono text-green-400 border border-green-500/30">
-                    CAM_01 // LIVE_STREAM
-                </div>
+                <div class="absolute top-2 left-2 z-10 bg-black/60 px-2 py-0.5 rounded text-[9px] font-mono text-green-400 border border-green-500/30">CAM_01 // LIVE_STREAM</div>
                 <img src="/video" class="w-full h-auto block" alt="Strumień wideo">
             </div>
             
@@ -307,7 +328,6 @@ HTML_TEMPLATE = """
         </div>
 
         <div class="lg:col-span-5 flex flex-col gap-4">
-            
             <div class="data-card p-4 rounded-lg border border-gray-800 relative overflow-hidden">
                 <div id="env-indicator" class="absolute top-0 right-0 w-1 h-full bg-blue-500 opacity-10 transition-opacity"></div>
                 <h2 class="text-[10px] font-bold text-gray-500 uppercase mb-3">Atmospheric Sensors</h2>
@@ -335,10 +355,8 @@ HTML_TEMPLATE = """
                 <h2 class="text-[10px] font-bold text-gray-500 uppercase mb-4 self-start">Digital Compass</h2>
                 <div class="relative w-28 h-28 rounded-full border border-gray-700 bg-black/40 shadow-[inset_0_0_10px_rgba(0,0,0,0.5)]">
                     <div class="absolute inset-0 flex items-center justify-center text-[8px] text-gray-600 font-bold">
-                        <span class="absolute top-1">N</span>
-                        <span class="absolute bottom-1">S</span>
-                        <span class="absolute left-1">W</span>
-                        <span class="absolute right-1">E</span>
+                        <span class="absolute top-1">N</span><span class="absolute bottom-1">S</span>
+                        <span class="absolute left-1">W</span><span class="absolute right-1">E</span>
                     </div>
                     <div id="compass-needle" class="absolute inset-0 flex items-center justify-center transition-transform duration-500 ease-out">
                         <div class="w-0.5 h-12 bg-gradient-to-t from-transparent via-red-500 to-red-500 rounded-full shadow-[0_0_5px_red]"></div>
@@ -349,7 +367,6 @@ HTML_TEMPLATE = """
                 </div>
                 <div class="mt-3 text-2xl font-mono text-yellow-500"><span id="heading-val">--</span>°</div>
             </div>
-
         </div>
     </div>
 
@@ -367,46 +384,39 @@ HTML_TEMPLATE = """
             btn.innerText = "KALIBRACJA...";
             btn.disabled = true;
             try { await fetch('/api/telemetry/reset', {method: 'POST'}); } catch (e) {}
-            setTimeout(() => { 
-                btn.innerText = originalText; 
-                btn.disabled = false;
-            }, 2000);
+            setTimeout(() => { btn.innerText = originalText; btn.disabled = false; }, 2000);
         }
 
-        async function updateData() {
-            try {
-                const [resMotion, resEnv] = await Promise.all([
-                    fetch('/api/telemetry/motion'),
-                    fetch('/api/telemetry/env')
-                ]);
-                
-                const motion = await resMotion.json();
-                const env = await resEnv.json();
+        const wsUrl = `ws://${window.location.host}/ws/telemetry`;
+        const ws = new WebSocket(wsUrl);
 
-                if (motion.motion.total_accel_m_s2 !== null) {
+        ws.onmessage = function(event) {
+            try {
+                const data = JSON.parse(event.data);
+                const motion = data.motion;
+                const env = data.environment;
+
+                if (motion && motion.motion && motion.motion.total_accel_m_s2 !== null) {
                     document.getElementById('acc-total').innerText = motion.motion.total_accel_m_s2.toFixed(2);
                     document.getElementById('vel-total-kmh').innerText = motion.motion.total_velocity_km_h.toFixed(2);
                     document.getElementById('pos-total').innerText = motion.motion.total_position_m.toFixed(2);
                     document.getElementById('gyr-total').innerText = motion.motion.total_gyro_rad_s.toFixed(2);
                 }
 
-                if (motion.compass.detected && motion.compass.heading_deg !== null) {
+                if (motion && motion.compass && motion.compass.detected && motion.compass.heading_deg !== null) {
                     document.getElementById('heading-val').innerText = motion.compass.heading_deg;
                     document.getElementById('compass-needle').style.transform = `rotate(${motion.compass.heading_deg}deg)`;
                 }
 
-                if (env.environment.temperature_c !== null) {
+                if (env && env.environment && env.environment.temperature_c !== null) {
                     flashIndicator('env-indicator');
                     document.getElementById('temp').innerText = env.environment.temperature_c + ' °C';
                     document.getElementById('hum').innerText = env.environment.humidity_percent + ' %';
                     document.getElementById('pres').innerText = env.environment.pressure_hpa + ' hPa';
                     document.getElementById('gas').innerText = (env.environment.gas_ohms / 1000).toFixed(1) + ' kΩ';
                 }
-            } catch (e) { console.error("Błąd pobierania danych", e); }
-        }
-
-        setInterval(updateData, 500);
-        updateData();
+            } catch (e) { console.error("Błąd przetwarzania danych", e); }
+        };
     </script>
 </body>
 </html>
@@ -420,11 +430,11 @@ def index():
 
 @app.get("/api/telemetry/env")
 def get_telemetry_env():
-    return sensors.get_env_data()
+    return telemetry_worker.latest_env
 
 @app.get("/api/telemetry/motion")
 def get_telemetry_motion():
-    return sensors.get_motion_data()
+    return telemetry_worker.latest_motion
 
 @app.post("/api/telemetry/reset")
 def reset_telemetry():
@@ -433,8 +443,24 @@ def reset_telemetry():
 
 @app.get("/video")
 def video_feed():
-    # Zwracanie strumienia z asynchronicznego generatora
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+# --- ENDPOINT WEBSOCKET ---
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry(websocket: WebSocket):
+    await websocket.accept()
+    print("[WS] Klient podłączył się do strumienia telemetrii.")
+    try:
+        while True:
+            payload = {
+                "motion": telemetry_worker.latest_motion,
+                "environment": telemetry_worker.latest_env
+            }
+            await websocket.send_json(payload)
+            # 10Hz wysyłania (100ms) - oszczędza sieć Wi-Fi RPi Zero
+            await asyncio.sleep(0.1) 
+    except WebSocketDisconnect:
+        print("[WS] Klient telemetrii rozłączony.")
 
 # --- URUCHOMIENIE SERWERA ---
 
@@ -450,7 +476,7 @@ def get_local_ip():
 if __name__ == "__main__":
     ip = get_local_ip()
     print("-" * 50)
-    print(f" PANEL KONTROLNY AKTYWNY")
-    print(f" ADRES: http://{ip}:8002")
+    print(f" PANEL KONTROLNY AKTYWNY (Z WS)")
+    print(f" ADRES: http://{ip}:8000") # Pamiętaj zmienić na 8002 w drugim skrypcie!
     print("-" * 50)
-    uvicorn.run(app, host="0.0.0.0", port=8002, access_log=False)
+    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)
