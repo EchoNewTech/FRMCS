@@ -4,19 +4,15 @@ import time
 import subprocess
 import uvicorn
 import board
-from fastapi import FastAPI
+import threading
+import asyncio
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import StreamingResponse, HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 
-# Próby importu bibliotek sprzętowych
-try:
-    import adafruit_bme680
-except ImportError:
-    adafruit_bme680 = None
-
-try:
-    from adafruit_lsm6ds.lsm6ds3 import LSM6DS3
-except ImportError:
-    LSM6DS3 = None
+# import bibliotek sprzętowych
+import adafruit_bme680
+from adafruit_lsm6ds.lsm6ds3 import LSM6DS3
 
 class TelemetrySensors:
     def __init__(self):
@@ -28,18 +24,21 @@ class TelemetrySensors:
             self.i2c = None
 
         self.bme = None
-        if self.i2c and adafruit_bme680:
+        if self.i2c:
             try:
                 self.bme = adafruit_bme680.Adafruit_BME680_I2C(self.i2c, address=0x76)
                 self.bme.sea_level_pressure = 1013.25 
-            except Exception: pass
+            except Exception as e:
+                print(f"[BME680] Nie wykryto czujnika: {e}")
 
         self.lsm = None
-        if self.i2c and LSM6DS3:
+        if self.i2c:
             try:
                 self.lsm = LSM6DS3(self.i2c)
-            except Exception: pass
+            except Exception as e:
+                print(f"[LSM6DS3] Nie wykryto akcelerometru: {e}")
 
+        # Inicjalizacja Kompasu (wygląda na układ BMM150 pod adresem 0x13)
         self.compass_detected = False
         try:
             import smbus2
@@ -49,12 +48,17 @@ class TelemetrySensors:
             time.sleep(0.01)
             self.bus.write_byte_data(0x13, 0x4C, 0x00) 
             self.compass_detected = True
-        except Exception: pass
+            print("[KOMPAS] Układ magnetyczny wykryty i aktywny.")
+        except Exception as e:
+            print(f"[KOMPAS] Brak modułu pod adresem 0x13: {e}")
 
         self.last_time = time.time()
         self.accel_offset = [0.0, 0.0, 0.0]
         self.velocity = [0.0, 0.0, 0.0]
         self.position = [0.0, 0.0, 0.0]
+        
+        # Filtry dolnoprzepustowe do wygładzenia surowych danych
+        self.filtered_accel = [0.0, 0.0, 0.0]
         self.calibrate_accelerometer()
 
     def calibrate_accelerometer(self):
@@ -67,22 +71,23 @@ class TelemetrySensors:
                     ox += x; oy += y; oz += z
                     valid_samples += 1
                 except Exception: pass
-                time.sleep(0.02)
+                time.sleep(0.01)
             if valid_samples > 0:
                 self.accel_offset = [ox / valid_samples, oy / valid_samples, oz / valid_samples]
+                print(f"[KALIBRACJA] Nowy offset: {self.accel_offset}")
         
         self.velocity = [0.0, 0.0, 0.0]
         self.position = [0.0, 0.0, 0.0]
         self.last_time = time.time()
 
     def get_env_data(self):
-        data = {"environment": {"temperature_c": None, "humidity_percent": None, "pressure_hpa": None, "gas_ohms": None}}
+        # Usunięto pole gazu z danych początkowych
+        data = {"environment": {"temperature_c": None, "humidity_percent": None, "pressure_hpa": None}}
         if self.bme:
             try:
                 data["environment"]["temperature_c"] = round(self.bme.temperature, 2)
                 data["environment"]["humidity_percent"] = round(self.bme.humidity, 2)
                 data["environment"]["pressure_hpa"] = round(self.bme.pressure, 2)
-                data["environment"]["gas_ohms"] = round(self.bme.gas, 2)
             except Exception: pass
         return data
 
@@ -101,32 +106,40 @@ class TelemetrySensors:
         dt = current_time - self.last_time
         self.last_time = current_time
 
+        # --- ODCZYT AKCELEROMETRU I ZYROSKOPU ---
         if self.lsm:
             try:
                 ax, ay, az = self.lsm.acceleration
                 gx, gy, gz = self.lsm.gyro
+                
+                # Odejmujemy kalibrację (grawitację)
                 ax_comp = ax - self.accel_offset[0]
                 ay_comp = ay - self.accel_offset[1]
                 az_comp = az - self.accel_offset[2]
                 
-                deadband = 0.35
-                ax_comp = 0.0 if abs(ax_comp) < deadband else ax_comp
-                ay_comp = 0.0 if abs(ay_comp) < deadband else ay_comp
-                az_comp = 0.0 if abs(az_comp) < deadband else az_comp
+                # Filtr dolnoprzepustowy zamiast psującego "deadbandu"
+                alpha = 0.2
+                self.filtered_accel[0] = (alpha * ax_comp) + ((1 - alpha) * self.filtered_accel[0])
+                self.filtered_accel[1] = (alpha * ay_comp) + ((1 - alpha) * self.filtered_accel[1])
+                self.filtered_accel[2] = (alpha * az_comp) + ((1 - alpha) * self.filtered_accel[2])
 
-                total_accel = math.sqrt(ax_comp**2 + ay_comp**2 + az_comp**2)
-
-                for i, val in enumerate([ax_comp, ay_comp, az_comp]):
-                    self.velocity[i] += val * dt
-                    self.velocity[i] *= 0.95 # Tłumienie dryftu
+                # Drobny deadband TYLKO na wejściu do całki
+                integration_deadband = 0.08 
+                
+                for i in range(3):
+                    val = self.filtered_accel[i]
+                    if abs(val) > integration_deadband:
+                        self.velocity[i] += val * dt
+                    self.velocity[i] *= 0.98 # Lekkie tłumienie dryftu
                     self.position[i] += self.velocity[i] * dt
 
+                total_accel = math.sqrt(sum(a**2 for a in self.filtered_accel))
                 total_vel = math.sqrt(sum(v**2 for v in self.velocity))
                 total_pos = math.sqrt(sum(p**2 for p in self.position))
                 total_gyro = math.sqrt(gx**2 + gy**2 + gz**2)
                 
                 data["motion"].update({
-                    "accel_filtered_m_s2": {"x": round(ax_comp, 2), "y": round(ay_comp, 2), "z": round(az_comp, 2)},
+                    "accel_filtered_m_s2": {"x": round(self.filtered_accel[0], 2), "y": round(self.filtered_accel[1], 2), "z": round(self.filtered_accel[2], 2)},
                     "total_accel_m_s2": round(total_accel, 2),
                     "velocity_m_s": {"x": round(self.velocity[0], 2), "y": round(self.velocity[1], 2), "z": round(self.velocity[2], 2)},
                     "total_velocity_km_h": round(total_vel * 3.6, 2),
@@ -137,49 +150,102 @@ class TelemetrySensors:
                 })
             except Exception: pass
 
+        # --- ODCZYT KOMPASU ---
         if self.compass_detected:
             try:
                 data_bytes = self.bus.read_i2c_block_data(0x13, 0x42, 6)
+                
+                # Rozkodowanie 13-bitowych danych
                 x = (data_bytes[1] << 5) | (data_bytes[0] >> 3)
                 if x > 4095: x -= 8192
+                
                 y = (data_bytes[3] << 5) | (data_bytes[2] >> 3)
                 if y > 4095: y -= 8192
+                
+                # Matematyka kąta
                 heading = math.atan2(y, x) * (180.0 / math.pi)
-                if heading < 0: heading += 360
+
+                # Normalizacja kąta do 0-360
+                if heading < 0:
+                    heading += 360
+                elif heading > 360:
+                    heading -= 360
+                    
                 data["compass"]["heading_deg"] = int(heading)
             except Exception: pass
             
         return data
 
-# --- LOGIKA KAMERY ---
-def generate_frames():
-    cmd = [
-        "rpicam-vid", "-t", "0", "--codec", "mjpeg", "--width", "480", "--height", "360",
-        "--framerate", "30", "-q", "40", "--inline", "-o", "-"
-    ]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    stream = b''
-    try:
-        while True:
-            chunk = process.stdout.read(4096)
-            if not chunk: break
-            stream += chunk
-            start = stream.find(b'\xff\xd8')
-            end = stream.find(b'\xff\xd9')
-            if start != -1 and end != -1:
-                jpg = stream[start:end+2]
-                stream = stream[end+2:]
-                yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + jpg + b'\r\n')
-    except Exception:
-        process.terminate()
-    finally:
-        process.terminate()
+# ========================================================
+# KRYTYCZNY SILNIK WIDEO
+# ========================================================
+class BackgroundCameraWorker:
+    def __init__(self):
+        self.latest_frame = None
+        self.process = None
 
-# --- SERWER ---
+    def start(self):
+        threading.Thread(target=self._video_loop, daemon=True).start()
+
+    def _video_loop(self):
+        cmd = [
+            "rpicam-vid", "-t", "0", "--codec", "mjpeg", 
+            "--width", "256", "--height", "144",
+            "--framerate", "11", "-q", "25", 
+            "--inline", "--flush", "-o", "-"
+        ]
+        self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        buffer = b''
+        
+        while True:
+            try:
+                chunk = self.process.stdout.read(1024)
+                if not chunk:
+                    break
+                buffer += chunk
+                
+                while True:
+                    start = buffer.find(b'\xff\xd8')
+                    if start == -1:
+                        break
+                    
+                    if start > 0:
+                        buffer = buffer[start:]
+                        start = 0
+                        
+                    end = buffer.find(b'\xff\xd9')
+                    if end == -1:
+                        break
+                    
+                    self.latest_frame = buffer[:end+2]
+                    buffer = buffer[end+2:]
+            except Exception:
+                break
+
+video_worker = BackgroundCameraWorker()
+video_worker.start()
+
+async def generate_frames():
+    last_sent_frame = None
+    while True:
+        frame = video_worker.latest_frame
+        if frame and frame != last_sent_frame:
+            last_sent_frame = frame
+            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+        await asyncio.sleep(0.05)
+
+# ========================================================
+# SERWER
+# ========================================================
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"]
+)
+
 sensors = TelemetrySensors()
 
-# --- TEMPLATKA INTERFEJSU (ZMNIEJSZONE ELEMENTY) ---
+# --- TEMPLATKA INTERFEJSU ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pl">
@@ -196,7 +262,7 @@ HTML_TEMPLATE = """
             border-radius: 0.5rem; 
             border: 1px solid #1f2937; 
             background: #000; 
-            max-width: 540px; /* Zmniejszona szerokość kamery */
+            max-width: 540px; 
             margin: 0 auto; 
         }
         .video-overlay { 
@@ -231,7 +297,7 @@ HTML_TEMPLATE = """
                 <div class="scanline"></div>
                 <div class="video-overlay"></div>
                 <div class="absolute top-2 left-2 z-10 bg-black/60 px-2 py-0.5 rounded text-[9px] font-mono text-green-400 border border-green-500/30">
-                    CAM_01 // MJPEG_480P
+                    CAM_01 // LIVE_STREAM
                 </div>
                 <img src="/video" class="w-full h-auto block" alt="Strumień wideo">
             </div>
@@ -267,7 +333,7 @@ HTML_TEMPLATE = """
             <div class="data-card p-4 rounded-lg border border-gray-800 relative overflow-hidden">
                 <div id="env-indicator" class="absolute top-0 right-0 w-1 h-full bg-blue-500 opacity-10 transition-opacity"></div>
                 <h2 class="text-[10px] font-bold text-gray-500 uppercase mb-3">Atmospheric Sensors</h2>
-                <div class="grid grid-cols-2 gap-4">
+                <div class="grid grid-cols-3 gap-2">
                     <div class="flex flex-col border-l-2 border-orange-500/50 pl-2">
                         <span class="text-[9px] text-gray-500 uppercase">Temperatura</span>
                         <span id="temp" class="text-lg font-mono text-orange-400">-- °C</span>
@@ -279,10 +345,6 @@ HTML_TEMPLATE = """
                     <div class="flex flex-col border-l-2 border-teal-500/50 pl-2">
                         <span class="text-[9px] text-gray-500 uppercase">Ciśnienie</span>
                         <span id="pres" class="text-base font-mono text-teal-400">-- hPa</span>
-                    </div>
-                    <div class="flex flex-col border-l-2 border-purple-500/50 pl-2">
-                        <span class="text-[9px] text-gray-500 uppercase">Jakość Pow.</span>
-                        <span id="gas" class="text-base font-mono text-purple-400">-- kΩ</span>
                     </div>
                 </div>
             </div>
@@ -356,7 +418,6 @@ HTML_TEMPLATE = """
                     document.getElementById('temp').innerText = env.environment.temperature_c + ' °C';
                     document.getElementById('hum').innerText = env.environment.humidity_percent + ' %';
                     document.getElementById('pres').innerText = env.environment.pressure_hpa + ' hPa';
-                    document.getElementById('gas').innerText = (env.environment.gas_ohms / 1000).toFixed(1) + ' kΩ';
                 }
             } catch (e) { console.error("Błąd pobierania danych", e); }
         }
@@ -391,6 +452,33 @@ def reset_telemetry():
 def video_feed():
     return StreamingResponse(generate_frames(), media_type="multipart/x-mixed-replace; boundary=frame")
 
+# --- NOWY ENDPOINT WEBSOCKET DLA GŁÓWNEGO PANELU ---
+@app.websocket("/ws/telemetry")
+async def websocket_telemetry(websocket: WebSocket):
+    await websocket.accept()
+    print("[WS] Główny panel FRMCS podłączył się do telemetrii!")
+    try:
+        while True:
+            # Pobieramy najświeższe dane
+            motion_data = sensors.get_motion_data()
+            env_data = sensors.get_env_data()
+            
+            # Pakujemy je w jeden słownik oczekiwany przez index.html
+            payload = {
+                "motion": motion_data,
+                "environment": env_data
+            }
+            
+            await websocket.send_json(payload)
+            # Odświeżanie strumienia co 0.5s
+            await asyncio.sleep(0.5)
+            
+    except WebSocketDisconnect:
+        print("[WS] Panel dyspozytorski odłączył telemetrię.")
+    except Exception as e:
+        print(f"[WS] Błąd strumienia: {e}")
+# ----------------------------------------------------
+
 # --- URUCHOMIENIE SERWERA ---
 
 def get_local_ip():
@@ -406,7 +494,12 @@ if __name__ == "__main__":
     ip = get_local_ip()
     print("-" * 50)
     print(f" PANEL KONTROLNY AKTYWNY")
-    print(f" ADRES: http://{ip}:8002")
+    print(f" ADRES: http://{ip}:8000")
     print("-" * 50)
-    # Wyłączenie logów uvicorn dla czystości konsoli
-    uvicorn.run(app, host="0.0.0.0", port=8002, access_log=False)
+    
+    # UWAGA: Pamiętaj o portach! 
+    # W pliku config.py na głównym serwerze przypisano adresy:
+    # Express -> Port 8000
+    # Cargo   -> Port 8000 (lub 8002 w zależności od tego, jak odpaliłeś)
+    # Zmień port poniżej, jeśli uruchamiasz to na drugiej malince Cargo.
+    uvicorn.run(app, host="0.0.0.0", port=8000, access_log=False)

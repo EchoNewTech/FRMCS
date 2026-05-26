@@ -23,7 +23,7 @@ TRAINS_CONFIG = {
     "cargo": {
         "name": "Cargo",   
         "mac": "9C:9A:C0:1A:7A:AF",
-        "rasp_url": "http://192.168.0.73:8000"   # <--- DODANE: Przypisanie Raspberry Pi 2 do Cargo
+        "rasp_url": "http://192.168.0.84:8000"   # <--- DODANE: Przypisanie Raspberry Pi 2 do Cargo
     }
 }
 
