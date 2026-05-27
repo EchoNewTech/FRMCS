@@ -470,8 +470,8 @@ async def websocket_telemetry(websocket: WebSocket):
             }
             
             await websocket.send_json(payload)
-            # Odświeżanie strumienia co 0.5s
-            await asyncio.sleep(0.5)
+            # Odświeżanie strumienia co 0.1s
+            await asyncio.sleep(0.1)
             
     except WebSocketDisconnect:
         print("[WS] Panel dyspozytorski odłączył telemetrię.")
