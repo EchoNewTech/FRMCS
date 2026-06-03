@@ -1,4 +1,6 @@
 from fastapi import FastAPI
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.staticfiles import StaticFiles
 import asyncio
 import traceback
 import os
@@ -16,22 +18,13 @@ from app.config import TRAINS_CONFIG
 
 from PIL import Image, ImageDraw, ImageFont
 
-try:
-    import board
-    import busio
-except ImportError:
-    board = None
-    busio = None
+from luma.core.interface.serial import i2c
+from luma.oled.device import ssd1306
+LUMA_AVAILABLE = True
 
-try:
-    import RPi.GPIO as GPIO
-except ImportError:
-    GPIO = None
+import RPi.GPIO as GPIO
+import urllib.request
 
-try:
-    import adafruit_ssd1306
-except ImportError:
-    adafruit_ssd1306 = None
 
 
 SPEAKER_PIN = 18
@@ -48,112 +41,106 @@ trains = {
     "cargo": LegoTrain("Cargo", os.getenv("CARGO_MAC", ""), "cargo")
 }
 
-trains["express"].telemetry_url = os.getenv("EXPRESS_URL", "")
-trains["cargo"].telemetry_url = os.getenv("CARGO_URL", "")
+# Przypisujemy telemetrie bez użycia os.getenv - bezpośrednio z konfiguracji
+trains["express"].telemetry_url = TRAINS_CONFIG.get("express", {}).get("rasp_url", "")
+trains["cargo"].telemetry_url = TRAINS_CONFIG.get("cargo", {}).get("rasp_url", "")
 
 class SpeedRequest(BaseModel):
     speed: int
 
-
+class CollisionLogRequest(BaseModel):
+    g_value: float
 
 class HardwareStationHUD:
     def __init__(self):
         self.oled = None
         self.pwm = None
         
-        if adafruit_ssd1306 and board and busio:
+        if LUMA_AVAILABLE:
             try:
-                i2c = busio.I2C(board.SCL, board.SDA)
-                # Używamy standardowego adresu 0x3C. Jeśli i2cdetect pokazał 3d, zmień parametr poniżej.
-                self.oled = adafruit_ssd1306.SSD1306_I2C(128, 64, i2c, addr=0x3C)
+                serial = i2c(port=1, address=0x3C)
+                self.device = ssd1306(serial)
                 
-                # --- EKRAN STARTOWY ---
-                image = Image.new("1", (self.oled.width, self.oled.height))
+                image = Image.new("1", (self.device.width, self.device.height))
                 draw = ImageDraw.Draw(image)
                 font = ImageFont.load_default()
-                draw.text((20, 20), "SYSTEM FRMCS", font=font, fill=255)
-                draw.text((20, 35), "URUCHAMIANIE...", font=font, fill=255)
-                self.oled.image(image)
-                self.oled.show()
-                print("[HARDWARE] Wyświetlacz Grove OLED zainicjalizowany (Adres 0x3C).")
+                draw.text((20, 20), "SYSTEM FRMCS", font=font, fill="white")
+                draw.text((20, 35), "RUNNING...", font=font, fill="white")
+                self.device.display(image.convert(self.device.mode))
+                print("[HARDWARE] Grove OLED display initialized (LUMA).")
             except Exception as e:
-                print(f"[HARDWARE] Brak ekranu OLED lub błąd I2C: {e}")                
+                print(f"[HARDWARE] No OLED display or I2C error: {e}")
+
         # 2. Inicjalizacja Głośnika Grove (PWM przez RPi.GPIO)
         if GPIO:
             try:
                 GPIO.setmode(GPIO.BCM)
                 GPIO.setup(SPEAKER_PIN, GPIO.OUT)
-                # Inicjalizacja PWM z częstotliwością startową 440Hz
                 self.pwm = GPIO.PWM(SPEAKER_PIN, 440)
-                self.pwm.start(0)  # 0% wypełnienia (Duty Cycle) oznacza całkowitą ciszę
-                print("[HARDWARE] Sprzętowy głośnik Grove (PWM) zainicjalizowany.")
+                self.pwm.start(0)  
+                print("[HARDWARE] Grove speaker (PWM) initialized.")
             except Exception as e:
-                print(f"[HARDWARE] Błąd inicjalizacji głośnika PWM: {e}")
+                print(f"[HARDWARE] Inicjalization error of speaker PWM: {e}")
 
     def play_ding_dong(self):
-        """Generuje 3 sprzętowe tony (G4, C5, E5) charakterystyczne dla polskich dworców."""
         if not self.pwm: 
             return
 
         def _play():
             try:
-                # Ton 1: G4 (392.00 Hz)
+                VOLUME = 10 
                 self.pwm.ChangeFrequency(392.00)
-                self.pwm.ChangeDutyCycle(50)  # Uruchomienie fali prostokątnej (50% głośności)
+                self.pwm.ChangeDutyCycle(VOLUME) 
                 time.sleep(0.6)
-                
-                # Ton 2: C5 (523.25 Hz)
                 self.pwm.ChangeFrequency(523.25)
                 time.sleep(0.6)
-                
-                # Ton 3: E5 (659.25 Hz)
                 self.pwm.ChangeFrequency(659.25)
                 time.sleep(1.2)
-                
-                # Koniec sekwencji - powrót do ciszy
                 self.pwm.ChangeDutyCycle(0)
             except Exception as e:
-                print(f"[AUDIO BŁĄD] Wystąpił problem podczas generowania tonów PWM: {e}")
+                print(f"[AUDIO ERROR] {e}")
             
-        # Odpalamy dźwięk w tle (w osobnym wątku), żeby nie zablokować głównego serwera FastAPI i pętli asyncio!
         threading.Thread(target=_play, daemon=True).start()
 
     def update_display(self, zones_data):
-        """Rysuje aktualny rozkład i zajętość stref na ekranie OLED."""
-        if not self.oled: return
+        if not self.device: return
         
-        # Tworzenie czystego obrazu binarnego w pamięci podręcznej RAM
-        image = Image.new("1", (self.oled.width, self.oled.height))
+        image = Image.new("1", (self.device.width, self.device.height))
         draw = ImageDraw.Draw(image)
         font = ImageFont.load_default()
         
-        # Nagłówek stacji
-        draw.text((2, 0), "STACJA GŁÓWNA", font=font, fill=255)
-        draw.line((0, 12, 128, 12), fill=255)
+        draw.text((2, 0), "MAIN STATION", font=font, fill="white")
+        draw.line((0, 12, 128, 12), fill="white")
         
-        # Wyświetlanie stanu stref
         y_offset = 16
         for z_id, occupant in zones_data.items():
-            status_text = f"STREFA {z_id}: "
-            status_text += occupant if occupant else "WOLNA"
+            status_text = f"ZONE {z_id}: "
+            status_text += occupant if occupant else "FREE"
             
-            # Negatyw dla zajętych stref (wyróżnienie wizualne)
             if occupant:
-                draw.rectangle((0, y_offset, 128, y_offset + 10), fill=255)
-                draw.text((2, y_offset), status_text, font=font, fill=0)
+                draw.rectangle((0, y_offset, 128, y_offset + 10), fill="white")
+                draw.text((2, y_offset), status_text, font=font, fill="black")
             else:
-                draw.text((2, y_offset), status_text, font=font, fill=255)
+                draw.text((2, y_offset), status_text, font=font, fill="white")
                 
             y_offset += 12
             if y_offset > 54: break 
             
-        self.oled.image(image)
-        self.oled.show()
-
+        self.device.display(image.convert(self.device.mode))
 
 hw_hud = HardwareStationHUD()
 
+class AlarmManager:
+    def __init__(self):
+        self.is_collision_active = False
+
+alarm_manager = AlarmManager()
+
 async def display_updater():
+    global _last_known_zones
+
+    _last_known_zones = {}
+
     while True:
         try:
             current_zones = {
@@ -161,10 +148,18 @@ async def display_updater():
                 for z_id in dispatcher.zones
             }
             hw_hud.update_display(current_zones)
-        except Exception as e:
-            print(f"[OLED ERROR] {e}")
-        await asyncio.sleep(1) # Odświeżanie raz na sekundę
 
+            # Logika dźwięku: jeśli ktoś wjechał do strefy, a wcześniej go tam nie było
+            for z_id, occupant in current_zones.items():
+                if occupant and _last_known_zones.get(z_id) != occupant:
+                    hw_hud.play_ding_dong()
+                    break
+            
+            _last_known_zones = current_zones.copy()
+
+        except Exception as e:
+            print(f"[OLED/AUDIO ERROR] {e}")
+        await asyncio.sleep(1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -177,10 +172,20 @@ async def lifespan(app: FastAPI):
         hw_hud.pwm.stop()
         GPIO.cleanup()
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, docs_url=None)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # --- ENDPOINTY ---
+@app.get("/docs", include_in_schema=False)
+async def custom_docs():
+    return get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="API Docs",
+        swagger_js_url="/static/swagger-ui-bundle.js",
+        swagger_css_url="/static/swagger-ui.css",
+        swagger_ui_parameters={"presets": ["SwaggerUIBundle.presets.apis", "SwaggerUIStandalonePreset"]}
+    )
 
 @app.post("/{train_id}/connect")
 async def connect_to_train(train_id: str):
@@ -192,13 +197,11 @@ async def connect_to_train(train_id: str):
         traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
-# --- BRAKUJĄCY ENDPOINT DISCONNECT ---
 @app.post("/{train_id}/disconnect")
 async def disconnect_train(train_id: str):
     if train_id not in trains: return {"status": "error", "message": "Not found"}
     try:
         await trains[train_id].disconnect()
-        # Ważne: zwalniamy strefy, które zajmował pociąg po rozłączeniu
         for z_id, occupant in list(dispatcher.zones.items()):
             if occupant == trains[train_id].name:
                 await dispatcher.free_zone_and_resume(z_id)
@@ -212,8 +215,6 @@ async def get_train_position(train_id: str):
     if train_id not in trains: return {"status": "error", "message": "Not found"}
     train = trains[train_id]
 
-    camera_url = TRAINS_CONFIG.get(train_id, {}).get("rasp_url", "")
-
     return {
         "status": "success",
         "data": {
@@ -222,7 +223,7 @@ async def get_train_position(train_id: str):
             "type": train.train_type,
             "connected": train.is_connected,
             "speed": train.speed,
-            "section": train.section,
+            "section": getattr(train, "section", "DISCONNECTED"),
             "rgb": train.rgb,
             "telemetry_url": train.telemetry_url
         }
@@ -230,7 +231,7 @@ async def get_train_position(train_id: str):
 
 @app.get("/config")
 async def get_api_config():
-    """Endpoint wymagany przez tablicę dworcową i system audio"""
+    from app.config import COLORS_CONFIG # Dynamiczny import zapobiegający problemom przy resecie
     return {
         "trains": {
             "express": {"name": "Express"},
@@ -252,7 +253,7 @@ async def get_system_status():
             tid: {
                 "connected": t.is_connected,
                 "speed": t.speed,
-                "section": t.section,
+                "section": getattr(t, "section", "DISCONNECTED"),
                 "telemetry_url": t.telemetry_url
             } for tid, t in trains.items()
         },
@@ -261,6 +262,41 @@ async def get_system_status():
             for z_id, occ in dispatcher.zones.items()
         },
     }
+
+@app.post("/{train_id}/telemetry/reset")
+async def reset_telemetry(train_id: str):
+    if train_id not in trains:
+        return {"status": "error", "message": "Not found"}
+    
+    t = trains[train_id]
+    
+    # 1. Przekazanie żądania POST fizycznie do malinki w pociągu
+    if getattr(t, 'telemetry_url', ""):
+        def _send_reset_to_train():
+            try:
+                url = f"{t.telemetry_url}/api/telemetry/reset"
+                req = urllib.request.Request(url, method='POST')
+                urllib.request.urlopen(req, timeout=3)
+            except Exception as e:
+                print(f"[{t.name}] Error during restarting Raspberry: {e}")
+        
+        # Odpalamy w tle, żeby nie "zawiesić" dyspozytora na czas wysyłania zapytania
+        await asyncio.to_thread(_send_reset_to_train)
+        logger.log(f"[{t.name}] Sensors reseted (INS) physically in train.")
+
+    # 2. Odblokowanie alarmu na głównym serwerze
+    alarm_manager.is_collision_active = False 
+    
+    return {"status": "success"}
+
+
+@app.post("/{train_id}/collision")
+async def log_collision_event(train_id: str, req: CollisionLogRequest):
+    if train_id in trains:
+        t = trains[train_id]
+        logger.log(f"CRITICAL ALARM: Collision at {t.name.upper()} ({req.g_value} m/s²)")
+    return {"status": "success"}
+
 
 @app.post("/{train_id}/speed")
 async def update_speed(train_id: str, req: SpeedRequest):
@@ -277,4 +313,5 @@ async def update_speed(train_id: str, req: SpeedRequest):
 async def stop_train(train_id: str):
     if train_id not in trains: return {"status": "error", "message": "Not found"}
     await trains[train_id].stop()
+    
     return {"status": "success"}

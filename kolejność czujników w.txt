@@ -1,4 +1,0 @@
-kolejność czujników w hubie od podłączenia do rb
-1 akcelerometr + żyroskop + kompas
-
-rgb calc: https://www.w3schools.com/colors/colors_rgb.asp

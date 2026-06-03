@@ -60,7 +60,7 @@ export default function Page() {
                   ) : (
                     <span className="text-red-400">Disconnected</span>
                   )}{" "}
-                  | Speed: {trainData?.speed || 0}%
+                  | Speed: {trainData?.speed || 0} km/h
                 </p>
 
                 <p className="text-sm text-gray-400 mt-1">

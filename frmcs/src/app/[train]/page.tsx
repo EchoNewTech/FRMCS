@@ -22,14 +22,16 @@ export default function TrainPage() {
   const [envData, setEnvData] = useState<any>(null);
   const [motionData, setMotionData] = useState<any>(null);
   const [isCalibrating, setIsCalibrating] = useState(false);
+  
+  // Stan alarmu
   const [collisionAlarm, setCollisionAlarm] = useState(false);
+  const collisionTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isPending, setIsPending] = useState(false);
   const isPollingPaused = useRef(false);
   const statusRequestRunning = useRef(false);
 
-  // COLLISION THRESHOLD from demo (6.0 m/s²)
-  const COLLISION_THRESHOLD = 6.0;
+  const COLLISION_THRESHOLD = 3.0;
 
   useEffect(() => {
     setMounted(true);
@@ -42,7 +44,7 @@ export default function TrainPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Fetch telemetry from local train raspberry target
+  // Odpytywanie telemetrii
   useEffect(() => {
     if (!telemetryUrl) return;
 
@@ -50,12 +52,15 @@ export default function TrainPage() {
       try {
         const controllerEnv = new AbortController();
         const controllerMotion = new AbortController();
-        const timeout1 = setTimeout(() => controllerEnv.abort(), 800);
-        const timeout2 = setTimeout(() => controllerMotion.abort(), 800);
+        const timeout1 = setTimeout(() => controllerEnv.abort(), 1500);
+        const timeout2 = setTimeout(() => controllerMotion.abort(), 1500);
+
+        // Usuwamy ewentualny ukośnik na końcu adresu, żeby uniknąć błędów 404 (np. //api/...)
+        const safeUrl = telemetryUrl.endsWith('/') ? telemetryUrl.slice(0, -1) : telemetryUrl;
 
         const [resEnv, resMotion] = await Promise.all([
-          fetch(`${telemetryUrl}/api/telemetry/env`, { signal: controllerEnv.signal }).catch(() => null),
-          fetch(`${telemetryUrl}/api/telemetry/motion`, { signal: controllerMotion.signal }).catch(() => null)
+          fetch(`${safeUrl}/api/telemetry/env`, { signal: controllerEnv.signal }).catch(() => null),
+          fetch(`${safeUrl}/api/telemetry/motion`, { signal: controllerMotion.signal }).catch(() => null)
         ]);
 
         clearTimeout(timeout1);
@@ -67,34 +72,32 @@ export default function TrainPage() {
           const mData = await resMotion.json();
           setMotionData(mData);
 
-          // ---- AUTOMATIC COLLISION ENGINE ----
           const accelValue = mData?.motion?.total_accel_m_s2;
-          if (accelValue && accelValue > COLLISION_THRESHOLD && !collisionAlarm) {
-            handleCollision(accelValue);
+          
+          if (accelValue !== undefined && accelValue > COLLISION_THRESHOLD) {
+            if (!collisionAlarm) {
+              handleCollision(accelValue);
+            }
           }
         }
       } catch (err) {
-        // Network timeout silencer
+        // Ciche ignorowanie timeoutów sieciowych
       }
     };
 
-    const telemetryInterval = setInterval(fetchTelemetry, 600); // 600ms fast tracker
+    const telemetryInterval = setInterval(fetchTelemetry, 600);
     return () => clearInterval(telemetryInterval);
   }, [telemetryUrl, collisionAlarm]);
 
   const getStatus = async () => {
     if (statusRequestRunning.current) return;
-
     statusRequestRunning.current = true;
 
     try {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 1500);
 
-      const res = await fetch(`${API}/${train}/position`, {
-        signal: controller.signal
-      });
-      
+      const res = await fetch(`${API}/${train}/position`, { signal: controller.signal });
       clearTimeout(timeoutId);
       
       const data = await res.json();
@@ -109,67 +112,115 @@ export default function TrainPage() {
         setTelemetryUrl(d.telemetry_url);
       }
     } catch (err: any) {
-      console.log(`[UI] Polling skipped.`);
     } finally {
-    statusRequestRunning.current = false;
-  }
+      statusRequestRunning.current = false;
+    }
   };
 
   const sendCommand = async (endpoint: string, body?: any) => {
     setIsPending(true);
     isPollingPaused.current = true; 
     try {
+      const controller = new AbortController();
+      // ZWIĘKSZAMY TIMEOUT DO 8 SEKUND (BLE potrzebuje czasu na parowanie!)
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
       const res = await fetch(`${API}/${train}/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
       });
+      clearTimeout(timeoutId);
+
       const data = await res.json();
       if (!res.ok || data.status === "error") throw new Error(data.message || "Request failed");
-      await getStatus();
+      
+      getStatus(); 
       return data;
+    } catch (err: any) {
+      throw new Error("Brak odp. serwera (BLE Lag/Timeout)");
     } finally {
       setIsPending(false);
       isPollingPaused.current = false;
     }
   };
 
-  // Automated emergency brake execution on impact
   const handleCollision = async (gValue: number) => {
     setCollisionAlarm(true);
-    toast.error(`CRITICAL ALARM: Impact Detected (${gValue.toFixed(2)} m/s²)! Deploying Emergency Brakes!`, {
-      duration: 5000,
+    isPollingPaused.current = true; 
+    setIsCalibrating(true); 
+
+    toast.error(`KRYTYCZNE ZDERZENIE: Wdrażam hamowanie (${gValue.toFixed(2)} m/s²)!`, {
+      duration: 4000,
       id: "collision-toast"
     });
+
+    setTimeout(() => setIsCalibrating(false), 1500);
+
+    if (collisionTimeoutRef.current) clearTimeout(collisionTimeoutRef.current);
+    collisionTimeoutRef.current = setTimeout(() => {
+        setCollisionAlarm(false);
+        isPollingPaused.current = false;
+    }, 5000);
+
     try {
-      await fetch(`${API}/${train}/stop`, { method: "POST" });
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 1500);
+
+      await fetch(`${API}/${train}/stop`, { method: "POST", signal: controller.signal }).catch(() => {});
       setSpeed(0);
+
+      await fetch(`${API}/${train}/telemetry/reset`, { method: "POST", signal: controller.signal }).catch(() => {});
+
+      await fetch(`${API}/${train}/collision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ g_value: Number(gValue.toFixed(2)) }),
+        signal: controller.signal
+      }).catch(() => {});
+
     } catch (e) {
-      console.error(e);
+      console.error("Collision handling error:", e);
     }
-    setTimeout(() => setCollisionAlarm(false), 5000);
   };
 
-  const calibrateSensors = async () => {
-    if (!telemetryUrl) return;
+  const resetSensors = async () => {
     setIsCalibrating(true);
-    const id = toast.loading("Calibrating IMU Accelerometer...");
-    try {
-      const res = await fetch(`${telemetryUrl}/api/telemetry/reset`, { method: "POST" });
-      if (res.ok) toast.success("IMU Standard Calibrated", { id });
-      else throw new Error();
-    } catch {
-      toast.error("Calibration timeout", { id });
-    } finally {
+    const id = toast.loading("Kalibracja układu INS...");
+    
+    setTimeout(() => {
       setIsCalibrating(false);
+    }, 1500);
+
+    try {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 2000);
+
+      const response = await fetch(`${API}/${train}/telemetry/reset`, { 
+        method: "POST",
+        signal: controller.signal
+      });
+      
+      if (response.ok) {
+        toast.success(`System ${train} zresetowany`, { id });
+        setCollisionAlarm(false);
+      } else {
+        throw new Error();
+      }
+    } catch (error) {
+      toast.error("Błąd kalibracji (Serwer zajęty)", { id });
     }
   };
 
-  const connect = () => sendCommand("connect");
-  const disconnect = () => sendCommand("disconnect");
-  const stop = () => sendCommand("stop");
+  // DODANO: Obsługa błędów .catch() zabezpiecza przed 'unhandledRejection'
+  const connect = () => sendCommand("connect").catch(err => toast.error(err.message));
+  const disconnect = () => sendCommand("disconnect").catch(err => toast.error(err.message));
+  const stop = () => sendCommand("stop").catch(err => toast.error(err.message));
 
   const changeSpeed = async (delta: number) => {
+    if (isPending || collisionAlarm) return;
+
     const newSpeed = Math.max(-80, Math.min(80, speed + delta));
     setSpeed(newSpeed);
     try {
@@ -181,11 +232,11 @@ export default function TrainPage() {
 
   if (!mounted) return null;
 
-  // Get dynamic heading configuration
   const heading = motionData?.compass?.heading_deg ?? null;
+  const safeCameraUrl = telemetryUrl.endsWith('/') ? telemetryUrl.slice(0, -1) : telemetryUrl;
 
   return (
-    <div className={`space-y-6 p-6 min-h-screen text-gray-300 max-w-7xl mx-auto transition-colors duration-300 ${collisionAlarm ? 'bg-red-950/20' : ''}`}>
+    <div className={`space-y-6 p-4 md:p-6 min-h-screen text-gray-300 max-w-7xl mx-auto transition-colors duration-300 ${collisionAlarm ? 'bg-red-950/20' : ''}`}>
       <button 
         onClick={() => router.push("/")}
         className="text-gray-500 hover:text-white transition-colors flex items-center gap-2"
@@ -193,18 +244,18 @@ export default function TrainPage() {
         <span>←</span> Cofnij
       </button>
 
-      <div className="flex justify-between items-center border-b border-gray-800 pb-4">
-        <h1 className="text-3xl font-black tracking-widest capitalize flex items-center gap-3 text-blue-500">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-gray-800 pb-4 gap-4">
+        <h1 className="text-2xl md:text-3xl font-black tracking-widest capitalize flex items-center gap-3 text-blue-500">
           {train} Control Panel
           {connected && <span className="w-3 h-3 rounded-full bg-green-500 animate-pulse"></span>}
         </h1>
         {telemetryUrl && (
           <button
-            onClick={calibrateSensors}
+            onClick={resetSensors}
             disabled={isCalibrating}
-            className="px-4 py-1.5 rounded bg-gray-900 border border-gray-700 font-mono text-xs hover:border-blue-500 text-gray-300 transition-all uppercase tracking-wider"
+            className="px-4 py-2 rounded bg-gray-900 border border-gray-700 font-mono text-xs hover:border-blue-500 text-gray-300 transition-all uppercase tracking-wider disabled:opacity-50 disabled:cursor-not-allowed w-full sm:w-auto"
           >
-            {isCalibrating ? "Calibrating..." : "Reset INS"}
+            {isCalibrating ? "Kalibracja..." : "Reset INS"}
           </button>
         )}
       </div>
@@ -212,23 +263,23 @@ export default function TrainPage() {
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
         {/* LEFT COLUMN - TELEMETRY SPEED CONTROL */}
-        <div className="lg:col-span-5 bg-gray-800 p-6 rounded-2xl shadow border border-gray-700 flex flex-col justify-between">
+        <div className="lg:col-span-5 bg-gray-800 p-4 md:p-6 rounded-2xl shadow border border-gray-700 flex flex-col justify-between">
           <div>
             <div className="flex justify-between items-center mb-6">
-              <p className="text-lg">
+              <p className="text-sm md:text-lg">
                 Status:{" "}
                 <span className={connected ? "text-green-400 font-bold" : "text-red-400 font-bold"}>
                   {connected ? "Connected" : "Disconnected"}
                 </span>
               </p>
-              <p className="text-lg font-mono">
-                Prędkość: <span className="text-yellow-400">{speed}%</span>
+              <p className="text-sm md:text-lg font-mono">
+                Velocity: <span className="text-yellow-400">{speed}%</span>
               </p>
             </div>
 
             <div className="bg-gray-900 p-4 rounded-xl mb-6 border border-gray-700 shadow-inner">
               <p className="text-xs text-gray-500 font-bold uppercase tracking-widest mb-1">Current Section</p>
-              <p className="text-2xl font-bold text-blue-400">{currentSection}</p>
+              <p className="text-xl md:text-2xl font-bold text-blue-400">{currentSection}</p>
             </div>
 
             <div className="flex gap-3 flex-wrap">
@@ -237,7 +288,7 @@ export default function TrainPage() {
                 disabled={connected || isPending} 
                 className={`flex-1 px-4 py-3 rounded-lg font-bold transition-colors shadow ${(!connected && !isPending) ? 'bg-green-600 text-white hover:bg-green-500' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}
               >
-                Połącz
+                Connect
               </button>
 
               <button 
@@ -245,7 +296,7 @@ export default function TrainPage() {
                 disabled={!connected || isPending} 
                 className={`flex-1 px-4 py-3 rounded-lg font-bold transition-colors shadow ${(connected && !isPending) ? 'bg-red-600 text-white hover:bg-red-500' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}
               >
-                Rozłącz
+                Disconnect
               </button>
 
               <button 
@@ -260,21 +311,21 @@ export default function TrainPage() {
 
           <div className="mt-8 pt-6 border-t border-gray-700">
             <p className="text-xs text-gray-500 font-bold mb-4 uppercase tracking-widest">Manual Speed Control</p>
-            <div className="flex gap-4">
+            <div className="flex flex-col sm:flex-row gap-4">
               <button
                 onClick={() => changeSpeed(10)}
-                disabled={!connected || isPending}
-                className={`flex-1 py-4 rounded-xl font-bold text-lg transition-colors shadow ${(connected && !isPending) ? 'bg-blue-600 text-white hover:bg-blue-500 border-b-4 border-blue-800' : 'bg-gray-700 text-gray-500 cursor-not-allowed border-b-4 border-gray-800'}`}
+                disabled={!connected || isPending || collisionAlarm}
+                className={`flex-1 py-4 rounded-xl font-bold text-sm md:text-lg transition-colors shadow ${(connected && !isPending && !collisionAlarm) ? 'bg-blue-600 text-white hover:bg-blue-500 border-b-4 border-blue-800' : 'bg-gray-700 text-gray-500 cursor-not-allowed border-b-4 border-gray-800'}`}
               >
-                PRZYSPIESZ (+10)
+                SPEED UP (+10)
               </button>
 
               <button
                 onClick={() => changeSpeed(-10)}
-                disabled={!connected || isPending}
-                className={`flex-1 py-4 rounded-xl font-bold text-lg transition-colors shadow ${(connected && !isPending) ? 'bg-blue-600 text-white hover:bg-blue-500 border-b-4 border-blue-800' : 'bg-gray-700 text-gray-500 cursor-not-allowed border-b-4 border-gray-800'}`}
+                disabled={!connected || isPending || collisionAlarm}
+                className={`flex-1 py-4 rounded-xl font-bold text-sm md:text-lg transition-colors shadow ${(connected && !isPending && !collisionAlarm) ? 'bg-blue-600 text-white hover:bg-blue-500 border-b-4 border-blue-800' : 'bg-gray-700 text-gray-500 cursor-not-allowed border-b-4 border-gray-800'}`}
               >
-                ZWOLNIJ (-10)
+                SPEED DOWN (-10)
               </button>
             </div>
           </div>
@@ -284,82 +335,79 @@ export default function TrainPage() {
         <div className="lg:col-span-7 flex flex-col gap-6">
           
           {/* CAMERA COMPONENT */}
-          <div className={`bg-gray-800 p-4 rounded-2xl shadow border transition-colors ${collisionAlarm ? 'border-red-600' : 'border-gray-700'}`}>
-            <h3 className="text-gray-500 text-xs font-bold mb-3 uppercase tracking-widest flex items-center w-full">
-              <span className={`w-2 h-2 rounded-full mr-2 ${telemetryUrl ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`}></span> 
-              FPV Live Dashcam
+          <div className={`bg-gray-800 p-4 rounded-2xl shadow border transition-colors ${collisionAlarm ? 'border-red-600 animate-pulse' : 'border-gray-700'}`}>
+            <h3 className="text-gray-500 text-xs font-bold mb-3 uppercase tracking-widest flex items-center justify-between w-full">
+              <span className="flex items-center">
+                <span className={`w-2 h-2 rounded-full mr-2 ${telemetryUrl ? 'bg-green-500 animate-pulse' : 'bg-gray-600'}`}></span> 
+                FPV Live Dashcam
+              </span>
+              <span className="text-[9px] opacity-40 lowercase font-mono">{telemetryUrl || "Brak URL"}</span>
             </h3>
             <div className="w-full bg-black rounded-xl border border-gray-900 overflow-hidden aspect-video flex items-center justify-center relative shadow-inner">
               {telemetryUrl ? (
                 <img 
-                  src={`${telemetryUrl}/video`} 
+                  src={`${safeCameraUrl}/video`} 
                   className="w-full h-full object-cover" 
                   alt="Live video feed"
                   onError={(e) => {
                     e.currentTarget.style.display = 'none';
-                    e.currentTarget.parentElement!.innerHTML = '<span class="text-gray-600 font-mono text-sm">FPV Stream Unreachable</span>';
+                    e.currentTarget.parentElement!.innerHTML = '<span class="text-gray-600 font-mono text-xs">FPV Stream Unreachable</span>';
                   }}
                 />
               ) : (
                 <span className="text-gray-600 font-mono text-sm">Camera Disconnected</span>
               )}
               {collisionAlarm && (
-                <div className="absolute inset-0 bg-red-600/30 flex items-center justify-center border-4 border-red-600 animate-pulse">
-                  <span className="bg-black text-red-500 font-black px-6 py-2 rounded-md text-xl tracking-wider border border-red-500">COLLISION IMPACT DETECTED</span>
+                <div className="absolute inset-0 bg-red-600/30 flex items-center justify-center border-4 border-red-600">
+                  <span className="bg-black text-red-500 font-black px-4 py-2 rounded-md text-sm md:text-xl tracking-wider border border-red-500 text-center">COLLISION DETECTED</span>
                 </div>
               )}
             </div>
           </div>
 
           {/* TELEMETRY MATRIX BLOCK */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+          <div className="flex flex-col md:grid md:grid-cols-12 gap-6">
             
             {/* INERTIAL NAVIGATION HUD */}
-            <div className="md:col-span-8 bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow backdrop-blur-sm grid grid-cols-2 gap-4">
-              <h2 className="col-span-2 text-[10px] font-bold uppercase tracking-widest text-gray-500 flex items-center gap-2 border-b border-gray-700 pb-2">
+            <div className="md:col-span-8 bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow backdrop-blur-sm flex flex-col gap-4">
+              <h2 className="text-[10px] font-bold uppercase tracking-widest text-gray-500 flex items-center gap-2 border-b border-gray-700 pb-2">
                 Inertial Navigation (INS)
               </h2>
-              <div className={`p-3 rounded-lg border shadow-inner flex flex-col items-center transition-colors ${collisionAlarm ? 'bg-red-950/40 border-red-700' : 'bg-gray-900 border-gray-700'}`}>
-                <span className="text-[9px] text-gray-500 uppercase">Vibrations</span>
-                <div className={`font-mono text-lg font-bold ${collisionAlarm ? 'text-red-500' : 'text-yellow-400'}`}>
-                  {motionData?.motion?.total_accel_m_s2 !== undefined ? motionData.motion.total_accel_m_s2.toFixed(2) : '--'}
-                  <span className="text-[10px] text-gray-500 ml-1">m/s²</span>
+              <div className="flex flex-col sm:flex-row gap-4 w-full">
+                <div className={`flex-1 p-3 rounded-lg border shadow-inner flex flex-col items-center transition-colors ${collisionAlarm ? 'bg-red-950/40 border-red-700' : 'bg-gray-900 border-gray-700'}`}>
+                  <span className="text-[9px] text-gray-500 uppercase">Vibrations</span>
+                  <div className={`font-mono text-lg font-bold ${collisionAlarm ? 'text-red-500' : 'text-yellow-400'}`}>
+                    {isCalibrating ? '--' : (motionData?.motion?.total_accel_m_s2 !== undefined ? motionData.motion.total_accel_m_s2.toFixed(2) : '--')}
+                    <span className="text-[10px] text-gray-500 ml-1">m/s²</span>
+                  </div>
                 </div>
-              </div>
-              <div className="bg-gray-900 p-3 rounded-lg border border-gray-700 shadow-inner flex flex-col items-center">
-                <span className="text-[9px] text-gray-500 uppercase">Est. Speed</span>
-                <div className="text-blue-400 font-mono text-lg font-bold">
-                  {motionData?.motion?.total_velocity_km_h !== undefined ? motionData.motion.total_velocity_km_h.toFixed(1) : '--'}
-                  <span className="text-[10px] text-gray-500 ml-1">km/h</span>
+                <div className="flex-1 bg-gray-900 p-3 rounded-lg border border-gray-700 shadow-inner flex flex-col items-center">
+                  <span className="text-[9px] text-gray-500 uppercase">Est. Speed</span>
+                  <div className="text-blue-400 font-mono text-lg font-bold">
+                    {isCalibrating ? '--' : (motionData?.motion?.total_velocity_km_h !== undefined ? motionData.motion.total_velocity_km_h.toFixed(1) : '--')}
+                    <span className="text-[10px] text-gray-500 ml-1">km/h</span>
+                  </div>
                 </div>
-              </div>
-              <div className="bg-gray-900 p-3 rounded-lg border border-gray-700 shadow-inner flex flex-col items-center">
-                <span className="text-[9px] text-gray-500 uppercase">Odometer</span>
-                <div className="text-purple-400 font-mono text-lg font-bold">
-                  {motionData?.motion?.total_position_m !== undefined ? motionData.motion.total_position_m.toFixed(1) : '--'}
-                  <span className="text-[10px] text-gray-500 ml-1">m</span>
-                </div>
-              </div>
-              <div className="bg-gray-900 p-3 rounded-lg border border-gray-700 shadow-inner flex flex-col items-center">
-                <span className="text-[9px] text-gray-500 uppercase">Gyro Rotation</span>
-                <div className="text-teal-400 font-mono text-lg font-bold">
-                  {motionData?.motion?.total_gyro_rad_s !== undefined ? motionData.motion.total_gyro_rad_s.toFixed(2) : '--'}
-                  <span className="text-[10px] text-gray-500 ml-1">rad/s</span>
+                <div className="flex-1 bg-gray-900 p-3 rounded-lg border border-gray-700 shadow-inner flex flex-col items-center">
+                  <span className="text-[9px] text-gray-500 uppercase">Gyro</span>
+                  <div className="text-teal-400 font-mono text-lg font-bold">
+                    {isCalibrating ? '--' : (motionData?.motion?.total_gyro_rad_s !== undefined ? motionData.motion.total_gyro_rad_s.toFixed(2) : '--')}
+                    <span className="text-[10px] text-gray-500 ml-1">rad/s</span>
+                  </div>
                 </div>
               </div>
             </div>
 
             {/* DYNAMIC DIGITAL COMPASS ELEMENT */}
             <div className="md:col-span-4 bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow backdrop-blur-sm flex flex-col items-center justify-center">
-              <h2 className="text-[10px] font-bold text-gray-500 uppercase mb-3 self-start">Compass</h2>
-              <div className="relative w-24 h-24 rounded-full border border-gray-700 bg-black/60 shadow-[inset_0_0_10px_rgba(0,0,0,0.8)]">
+              <h2 className="text-[10px] font-bold text-gray-500 uppercase mb-3 self-start w-full border-b border-gray-700 pb-2">Compass</h2>
+              <div className="relative w-20 h-20 md:w-24 md:h-24 rounded-full border border-gray-700 bg-black/60 shadow-[inset_0_0_10px_rgba(0,0,0,0.8)] mt-2">
                 <div className="absolute inset-0 flex items-center justify-center text-[8px] text-gray-600 font-black">
                   <span className="absolute top-1 text-red-500/80">N</span>
                   <span className="absolute bottom-1">S</span>
                   <span className="absolute left-1">W</span>
                   <span className="absolute right-1">E</span>
                 </div>
-                {/* ROTATING NEEDLE VALVE BASED ON COMPASS DEGREES */}
                 <div 
                   className="absolute inset-0 flex items-center justify-center transition-transform duration-300 ease-out"
                   style={{ transform: heading !== null ? `rotate(${heading}deg)` : 'rotate(0deg)' }}
@@ -370,39 +418,33 @@ export default function TrainPage() {
                   <div className="w-1.5 h-1.5 bg-white rounded-full shadow"></div>
                 </div>
               </div>
-              <div className="mt-2 font-mono text-xl font-bold text-yellow-500">
+              <div className="mt-3 font-mono text-lg md:text-xl font-bold text-yellow-500">
                 {heading !== null ? `${heading}` : '--'}<span className="text-xs text-gray-500">°</span>
               </div>
             </div>
 
             {/* ATMOSPHERIC SENSORS PANEL */}
-            <div className="col-span-12 bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow backdrop-blur-sm">
-              <h2 className="text-[10px] font-bold uppercase tracking-widest text-gray-500 mb-3 flex items-center gap-2">
+            <div className="md:col-span-12 bg-gray-800/80 p-4 rounded-xl border border-gray-700 shadow backdrop-blur-sm flex flex-col gap-3">
+              <h2 className="text-[10px] font-bold uppercase tracking-widest text-gray-500 border-b border-gray-700 pb-2 flex items-center gap-2">
                 Weather & Air Telemetry
               </h2>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                <div className="border-l-2 border-orange-500/50 pl-3">
-                  <span className="text-[9px] text-gray-500 uppercase block">Temperature</span>
+              <div className="flex flex-col sm:flex-row gap-4 w-full">
+                <div className="flex-1 border-l-2 border-orange-500/50 pl-3 py-2 bg-gray-900/40 rounded-r-lg">
+                  <span className="text-[9px] text-gray-500 uppercase block">Temp</span>
                   <span className="text-lg font-mono font-bold text-orange-400">
                     {envData?.environment?.temperature_c !== undefined ? envData.environment.temperature_c.toFixed(1) : '--'} <span className="text-xs text-gray-600">°C</span>
                   </span>
                 </div>
-                <div className="border-l-2 border-blue-500/50 pl-3">
+                <div className="flex-1 border-l-2 border-blue-500/50 pl-3 py-2 bg-gray-900/40 rounded-r-lg">
                   <span className="text-[9px] text-gray-500 uppercase block">Humidity</span>
                   <span className="text-lg font-mono font-bold text-blue-400">
                     {envData?.environment?.humidity_percent !== undefined ? envData.environment.humidity_percent.toFixed(1) : '--'} <span className="text-xs text-gray-600">%</span>
                   </span>
                 </div>
-                <div className="border-l-2 border-teal-500/50 pl-3">
+                <div className="flex-1 border-l-2 border-teal-500/50 pl-3 py-2 bg-gray-900/40 rounded-r-lg">
                   <span className="text-[9px] text-gray-500 uppercase block">Pressure</span>
                   <span className="text-lg font-mono font-bold text-teal-400">
                     {envData?.environment?.pressure_hpa !== undefined ? envData.environment.pressure_hpa.toFixed(0) : '--'} <span className="text-xs text-gray-600">hPa</span>
-                  </span>
-                </div>
-                <div className="border-l-2 border-purple-500/50 pl-3">
-                  <span className="text-[9px] text-gray-500 uppercase block">Gas Resistance</span>
-                  <span className="text-lg font-mono font-bold text-purple-400">
-                    {envData?.environment?.gas_ohms !== undefined ? (envData.environment.gas_ohms / 1000).toFixed(1) : '--'} <span className="text-xs text-gray-600">kΩ</span>
                   </span>
                 </div>
               </div>
